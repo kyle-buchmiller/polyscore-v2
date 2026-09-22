@@ -216,3 +216,27 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- workspace environment convention (sam setup writes .envrc) --------------
+.env
+.envrc
+.venv/
+
+# --- pipeline outputs -------------------------------------------------------
+# Snapshots, feature matrices, splits and fitted models are reproducible from
+# the stage scripts plus their manifests. They are large and they are NOT the
+# unit of reproducibility — the manifest is. Keep them out of git.
+# NB: `data/*` not `data/` — git cannot re-include a file whose parent
+# directory is excluded, so `data/` would swallow the negations below.
+data/*
+!data/.gitkeep
+!data/README.md
+*.parquet
+*.pkl
+*.joblib
+*.onnx
+
+# --- evaluation artefacts ---------------------------------------------------
+reports/
+*.png
+!docs/**/*.png

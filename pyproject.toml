@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "polyscore-v2"
+version = "0.1.0"
+description = "PolyScore rebuilt as a calibrated probability of maliciousness."
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+authors = [{ name = "PolySwarm" }]
+
+# Authoritative dependency list. `make lock` compiles this to requirements.txt.
+dependencies = [
+    # data handling
+    "pandas>=2.2",
+    "numpy>=1.26",
+    "pyarrow>=16",            # parquet — keeps column types, unlike CSV
+    # database access
+    "SQLAlchemy>=2.0",
+    "psycopg[binary]>=3.1",
+    # modelling
+    "scikit-learn>=1.5",      # splitting, metrics, calibration, logistic regression
+    "lightgbm>=4.3",          # the gradient-boosted tree model
+    # plotting — the reliability diagram is the one plot that matters
+    "matplotlib>=3.8",
+    # config + logging, per workspace standards
+    "pydantic>=2.7",
+    "pydantic-settings>=2.2",
+    "python-json-logger>=2.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",
+    "ruff>=0.5",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["src", "pipeline", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
