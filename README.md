@@ -23,10 +23,14 @@ has succeeded completely.
 3. [`specs/01-estimand.md`](./specs/01-estimand.md) — **the frozen decisions.** Read before writing code.
 4. [`decisions/`](./decisions/) — why things are the way they are.
 
+Two diagrams render the pipeline and the serving path: [**Build and Serve**](https://claude.ai/artifact/EHDK37N6ZgJ8EjpHaa5wKZ).
+The specs are authoritative; the diagrams follow them.
+
 ## Layout
 
 ```
 specs/       design contracts — authoritative on intent
+             (07-requests.md: what we need from other teams)
 decisions/   dated decision records — authoritative on why
 pipeline/    the eight numbered stages, run in order
 src/         shared code the stages import
@@ -65,7 +69,8 @@ make features    # 04 — build the feature matrix, as-of enforced
 make split       # 05 — temporal + family-grouped split
 make baselines   # 06 — the four baselines, BEFORE any model
 make train       # 07 — three comparisons
-make evaluate    # 08 — open the test set, once
+make calibrate   # 08 — fit the calibrator and combiner (fits; changes the model)
+make evaluate    # 09 — open the test set, once (measures; fits nothing)
 ```
 
 Stage 06 is the most informative half hour in the project. If the

@@ -16,6 +16,14 @@ PR. If a PR drifts from a spec, the spec is wrong until proven otherwise.
 4. The spec for the area you are changing.
 5. [`decisions/`](./decisions/) — dated records of why things are the way they are.
 
+Two diagrams render the above and are useful for orientation:
+[**Build and Serve**](https://claude.ai/artifact/EHDK37N6ZgJ8EjpHaa5wKZ) — the training pipeline with every technology slot named, and
+the serving path from upload to a composed PolyScore. **The specs are authoritative; the
+diagrams are a rendering.** When a stage or a signal changes, change the spec first and
+treat the diagram as stale until it catches up.
+
+If you own a platform repo and landed here because PolyScore asked you for something, [`specs/07-requests.md`](./specs/07-requests.md) is the page you want.
+
 ## Specs index
 
 | Spec | Scope |
@@ -24,14 +32,16 @@ PR. If a PR drifts from a spec, the spec is wrong until proven otherwise.
 | [`specs/01-estimand.md`](./specs/01-estimand.md) | The eight frozen decisions: population, scoring moment, label, horizon, split, metric, baselines, decision rule |
 | [`specs/02-data.md`](./specs/02-data.md) | What is collected, from which source, and the as-of rule |
 | [`specs/03-labels.md`](./specs/03-labels.md) | Label taxonomy, grades, and how the pilot's labels are derived |
-| [`specs/04-pipeline.md`](./specs/04-pipeline.md) | The eight stages, their contracts, and what each writes |
+| [`specs/04-pipeline.md`](./specs/04-pipeline.md) | The nine stages, their contracts, and what each writes |
 | [`specs/05-evaluation.md`](./specs/05-evaluation.md) | Metrics, baselines, the look-once rule, the standing controls |
+| [`specs/06-signals.md`](./specs/06-signals.md) | Signal vocabulary, presence semantics, coverage tiers, and the combiner contract |
+| [`specs/07-requests.md`](./specs/07-requests.md) | Capabilities other teams own that PolyScore needs — outward-facing |
 | [`specs/99-open-questions.md`](./specs/99-open-questions.md) | Known follow-ups and unresolved questions |
 
 Specs follow a strict convention: each opens with **Scope** and **Invariants**, is
 independently readable, and names the files and symbols it talks about.
 
-## The three invariants
+## The four invariants
 
 Everything else is a preference. These three are what the repo exists to protect, and
 each corresponds to a specific way the 2023 model was destroyed.
@@ -49,8 +59,14 @@ are defined in `specs/03-labels.md`; grade 0 is banned outright and grade 1 may 
 but never calibrate.
 
 **3 · The test split is opened once.** After a look, any change makes it a tuning set.
-Only `pipeline/08_evaluate.py` reads it. Access is logged; if the count exceeds two,
+Only `pipeline/09_evaluate.py` reads it. Access is logged; if the count exceeds two,
 the count is printed next to the metric.
+
+**4 · Composition is fitted, never asserted.** `polyscore` is the output of a small
+combiner over the base score plus signals. Its coefficients are *fitted artefacts with a
+version*, changed by refitting on data and reviewed like any model promotion. Editing a
+coefficient in place to chase a complaint turns the score back into a hand-tuned
+aggregate — which is where it started. See `specs/06-signals.md`.
 
 ## Layout
 
