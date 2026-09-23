@@ -51,4 +51,4 @@ def reliability(y_true: np.ndarray, y_prob: np.ndarray, *, n_bins: int = 10):
     volumes: it will fit the calibration set exactly and look wonderful for the wrong
     reason.
     """
-    raise NotImplementedError("stage 08 — see specs/05-evaluation.md")
+    raise NotImplementedError("stage 09 — see specs/05-evaluation.md")

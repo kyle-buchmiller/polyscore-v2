@@ -2,13 +2,24 @@
 
 ## Scope
 
-The eight stages, what each reads and writes, and the contract between them.
+The nine stages, what each reads and writes, and the contract between them.
 
 ## Invariants
 
 - Each stage does one job, reads the previous stage's output, and writes its own.
 - A stage can be re-run without redoing the ones before it.
-- Only stage 08 reads the test split.
+- Only stage 09 reads the test split.
+- Stage 08 **fits**; stage 09 **measures**. Nothing fits and measures.
+
+## Rendered as a diagram
+
+[**Build and Serve**](https://claude.ai/artifact/EHDK37N6ZgJ8EjpHaa5wKZ) draws these stages top to bottom — each row showing the
+process, the library that performs it, and the file it writes — alongside a *slot table*
+naming what technology currently fills each replaceable component. Use it to place a new
+tool against the incumbent.
+
+That page is a **rendering of this spec, not a second source of truth.** If they disagree,
+this file wins and the diagram is stale. Link is internal and privately shared.
 
 ## Shape
 
@@ -29,7 +40,8 @@ types and will not silently turn a hash into a number.
 | `05_split.py` | features | `data/splits/{train,validate,test}.parquet` (+ `*_random.parquet`) | pandas, scikit-learn |
 | `06_baselines.py` | splits (not test) | `data/reports/baselines.txt` | scikit-learn |
 | `07_train.py` | train + validate | `data/models/{a,b,c}.joblib` | scikit-learn, lightgbm |
-| `08_evaluate.py` | models + **test** | `data/reports/evaluation.txt`, `reliability.png` | scikit-learn, matplotlib |
+| `08_calibrate.py` | models + validate | `data/models/{calibrator,combiner}.joblib` | scikit-learn |
+| `09_evaluate.py` | models + calibrator + combiner + **test** | `data/reports/evaluation.txt`, `reliability.png` | scikit-learn, matplotlib |
 
 ## Stage contracts
 
@@ -75,13 +87,28 @@ Drop `class_weight` entirely rather than replacing it. **No synthetic oversampli
 (SMOTE and relatives): interpolating between sparse binary engine responses invents
 combinations that have never occurred and destroys calibration.
 
-**08 · evaluate.** Load frozen models, score the test split, print the primary metric
-beside all four baselines, fit a calibrator on held-out data and draw the reliability
-diagram with bootstrap confidence bands. Platt or beta calibration — **not isotonic** at
-pilot volumes, where it will fit the calibration set exactly and look wonderful for the
-wrong reason. The width of the confidence bands is the finding.
+**08 · calibrate.** Fit two artefacts on **held-out** data: the *calibrator* (base score →
+probability, Platt or beta — **not isotonic** at pilot volumes, where it fits the
+calibration set exactly and looks wonderful for the wrong reason) and the *combiner*
+(the small fitted model over base score plus signal indicators, per
+[`06-signals.md`](./06-signals.md)). Both are versioned separately from the base model
+because they refit on a different cadence.
+
+> **Why this is not part of stage 09.** This stage *fits* — it changes the model. Stage 09
+> *measures* under a look-once rule. A stage that does both cannot honour that rule: look
+> at the reliability diagram, refit the calibrator, and the test set has been spent
+> without anyone noticing. Separating them is what makes the rule enforceable.
+
+Until grade-3 labels exist the combiner cannot be fitted; per decision 0005 its
+coefficients are expert-set **in log-odds** and the score carries
+`calibration: provisional`.
+
+**09 · evaluate.** Load the frozen models *and* the frozen calibrator and combiner, score
+the test split, print the primary metric beside all four baselines, and draw the
+reliability diagram with bootstrap confidence bands. **Fits nothing.** The width of the
+confidence bands is the finding.
 
 ## Running
 
-`make all` runs 01–07 and deliberately stops. Stage 08 is invoked by hand, once, after
-the model is frozen — see [`05-evaluation.md`](./05-evaluation.md).
+`make all` runs 01–08 and deliberately stops. Stage 09 is invoked by hand, once, after
+the model, calibrator and combiner are all frozen — see [`05-evaluation.md`](./05-evaluation.md).
