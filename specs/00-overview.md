@@ -47,16 +47,22 @@ A retrain reproduces all three with fresher coefficients.
 ## The two-stage shape
 
 ```
-evidence  ->  discriminator  ->  calibrator  ->  coverage gate  ->  score record
-              (ranks)           (turns rank    (may refuse       (value, status,
-                                 into a         to answer)        interval)
-                                 probability)
+engine evidence ->  base model  ->  raw score --+
+                    (ranks)                     |
+signature signals --------------------------> COMBINER -> coverage gate -> score record
+sandbox signals ----------------------------->  (small,    (may refuse     (polyscore,
+                                                 fitted)    to answer)      status,
+                                                                            components)
 ```
 
 The discriminator and the calibrator are **separately versioned** and fitted on
 different data. The calibrator is the mechanism that makes the number a probability,
 and it may only be fitted on independently adjudicated labels — see
 [`03-labels.md`](./03-labels.md).
+
+`polyscore` is the **combiner's** output — one calibrated number, composed from several
+evidence sources, with the base probability and per-signal contributions exposed for
+drill-down. See [`06-signals.md`](./06-signals.md).
 
 The coverage gate is what permanently kills the 0.33 problem: when there is not enough
 evidence, the system returns *no score and a reason* rather than a number.
