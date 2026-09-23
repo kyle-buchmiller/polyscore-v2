@@ -32,3 +32,4 @@ than one that records being right.
 | [0002](./0002-metadata-not-binaries.md) | Train on metadata, not file bytes | Accepted |
 | [0003](./0003-pilot-scope-10k-pe.md) | Pilot scope is 10,000 Windows PE files | Accepted |
 | [0004](./0004-labels-time-separated-for-the-pilot.md) | Pilot labels are time-separated consensus, not adjudication | Accepted |
+| [0005](./0005-composite-polyscore-via-a-fitted-combiner.md) | Composite PolyScore via a fitted combiner (amends 0001) | Accepted |

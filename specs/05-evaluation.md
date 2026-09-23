@@ -27,11 +27,14 @@ cares about.
 Enforcement is physical, not procedural:
 
 - `05_split.py` writes the test split to `data/splits/test.parquet`;
-- **nothing in `pipeline/` loads it except `08_evaluate.py`**;
+- **nothing in `pipeline/` loads it except `09_evaluate.py`**;
 - every access is appended to `data/reports/test_access.log` with a timestamp;
-- if the count exceeds two, `08_evaluate.py` prints that count next to the metric.
+- if the count exceeds two, `09_evaluate.py` prints that count next to the metric.
 
-Treat any code outside stage 08 that reads the test split as a bug.
+Treat any code outside stage 09 that reads the test split as a bug.
+
+Note that stage 08 (calibrate) deliberately fits on **validate**, not test — a stage that
+both fits and measures cannot honour the rule above.
 
 ## What to produce
 

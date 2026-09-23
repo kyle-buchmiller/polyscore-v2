@@ -1,7 +1,10 @@
 # 99 — Open questions
 
-Known follow-ups. Move an item into a spec once it is decided, and record the decision
-in `decisions/`.
+Known follow-ups — decisions **we** owe. Move an item into a spec once it is decided, and
+record the decision in `decisions/`.
+
+Asks on **other teams** live in [`07-requests.md`](./07-requests.md). If an item needs
+somebody else to build something, it belongs there, not here.
 
 ## Blocking the pilot
 
@@ -13,6 +16,21 @@ in `decisions/`.
 - **Engine clustering.** The label rules require counting *independent clusters*, not
   engines. The similarity work exists in `polyscore-pipeline` but is orphaned; it needs
   porting or replacing.
+
+## Blocking the composite
+
+The platform capabilities the composite depends on have moved to
+[`07-requests.md`](./07-requests.md) — they are asks on other teams rather than decisions
+we owe. Specifically R1 (random detonation arm), R5 (bulk sandbox reports), R7
+(certificate reputation) and R8 (engine independence clusters).
+
+What remains ours to decide:
+
+- **Who sets the provisional combiner coefficients**, who reviews them, and what marks a
+  score `calibration: provisional` in the API. Decision 0005 fixes the posture but not
+  the owner.
+- **One combiner or one per coverage tier.** Deliberately left data-driven: fit one, report
+  calibration per tier, split if the curves diverge. Somebody has to actually look.
 
 ## Blocking a real model
 

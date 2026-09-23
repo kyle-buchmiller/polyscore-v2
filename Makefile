@@ -1,5 +1,5 @@
 .PHONY: help setup lock lint test clean \
-        extract compose label features split baselines train evaluate all
+        extract compose label features split baselines train calibrate evaluate all
 
 PY := python
 
@@ -39,10 +39,12 @@ baselines:  ## 06 the four baselines, before any model
 	$(PY) pipeline/06_baselines.py
 train:      ## 07 the three comparisons
 	$(PY) pipeline/07_train.py
-evaluate:   ## 08 open the test set, once
-	$(PY) pipeline/08_evaluate.py
+calibrate:  ## 08 fit the calibrator and the combiner
+	$(PY) pipeline/08_calibrate.py
+evaluate:   ## 09 open the test set, once
+	$(PY) pipeline/09_evaluate.py
 
-all: extract compose label features split baselines train  ## everything except evaluate
+all: extract compose label features split baselines train calibrate  ## everything except evaluate
 	@echo
-	@echo "Deliberately stopping before 08_evaluate."
-	@echo "The test set is opened once, by hand, after the model is frozen."
+	@echo "Deliberately stopping before 09_evaluate."
+	@echo "The test set is opened once, by hand, after model + calibrator + combiner are frozen."

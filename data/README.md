@@ -27,6 +27,6 @@ came from.
 ## The test split is handled differently on purpose
 
 `05_split.py` writes the test split here like any other file, but nothing in
-`pipeline/` loads it except `08_evaluate.py`. That separation is the mechanism
+`pipeline/` loads it except `09_evaluate.py`. That separation is the mechanism
 behind the look-once rule in `specs/05-evaluation.md`; treat any code that reads
 it elsewhere as a bug.
