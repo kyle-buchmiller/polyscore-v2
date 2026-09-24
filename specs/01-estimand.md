@@ -2,7 +2,7 @@
 
 ## Scope
 
-The eight decisions that define what the number means. **Frozen.** Changing any of
+The nine decisions that define what the number means. **Frozen.** Changing any of
 them invalidates every result produced under the old version; bump the version at the
 bottom and record the change in `decisions/`.
 
@@ -32,6 +32,29 @@ model.
 *If volume falls short*, widen it — and record here that you did, and that the base rate
 is inflated as a result.
 
+*Counting rule.* **Per artifact, deduplicated on sha256 — never per scoring event.** A
+file a thousand customers look up counts once. Per-event weighting would make the base
+rate a function of who happened to be querying that month: a threat hunter bulk-checking
+corporate software and a blue-team analyst working an incident pull it in opposite
+directions, and nothing distinguishes them. It is also the weighting that makes 0001's
+sentence literally true — the promise is "X% of *files* like this," not "X% of lookups
+like this."
+
+> **Known gap — files customers hold but never submitted.** A customer who finds a file
+> on their network hash-searches first, and uploads only if the search misses, *and*
+> policy permits, *and* they still choose to. Submissions are therefore approximately
+> `novel ∩ suspicious-enough-to-justify-the-paperwork`, and any file already in PolySwarm
+> is invisible to this frame even while sitting on a customer's disk — yet we serve a
+> score for it on every hash lookup. The frame describes what we *store*, not what we
+> *answer for*.
+>
+> This does not bind on the pilot. Per [`0004`](../decisions/0004-labels-time-separated-for-the-pilot.md)
+> the pilot's labels are grade 1 and may never calibrate, and the reference population is
+> the denominator for *calibration*. Settle it before calibration is real, not before
+> training is. The candidate fix — membership by lookup-or-submission, counted once, the
+> log answering "did anyone ask about this file" and never "how often" — is recorded in
+> [`08-future-work.md`](./08-future-work.md).
+
 > **Date caveat.** Until early September 2026 an artifact only reached the metadata
 > index if something *came back* about it. A cohort drawn from the historical index
 > over-represents successfully-analysed files, which is the opposite of what the
@@ -57,7 +80,26 @@ things a fully-informed owner of that machine would not agree to, for someone el
 benefit — assessed as of a stated date.
 
 Four labels, not two: `malicious`, `benign`, `unwanted`, `undecidable`. Train on the
-first two; report the other two as rates. Full taxonomy in
+first two; report the other two as rates.
+
+*Why four and not seven.* A finer taxonomy was specified first — separating attested
+`known_good` from adjudicated `benign`, `dual_use` from `unwanted`, and carving out
+`excluded` — and was **collapsed for the pilot** ([`0007`](../decisions/0007-four-labels-for-the-pilot.md)).
+Four is a claim about how many categories a 10,000-file cohort can populate, not about
+how many the world has: at realistic prevalence the finer classes hold tens of files
+each, which is too few to train on, too few to measure a rate from, and enough to make
+every count look more precise than it is. Nothing was discarded — the attestation moved
+to the **grade**, `dual_use` to a **reason field**, and `excluded` to the **cohort
+filter**, where it belonged.
+
+*Why the two rate-only labels are not folded into the binary.* Because the size of that
+decision is unknown until it is measured. If `unwanted` is 1% of traffic, folding it
+either way is a footnote; at 25% it is the single biggest determinant of what the score
+means. Excluding them from training does **not** exclude them from production — the model
+scores them anyway, having never seen one — so the rate is how that blind spot is sized.
+Re-expanding the taxonomy is a new estimand version, not a code change.
+
+Full taxonomy, the fold map and the rate denominators in
 [`03-labels.md`](./03-labels.md).
 
 ## 4 · Horizon
@@ -128,9 +170,104 @@ Printed first, always, so the model's number never appears alone.
 A model that merely *ties* baseline 3 is a real and useful result: it says the rebuild's
 value lives in calibration and abstention rather than in ranking.
 
+## 9 · Sampling design
+
+**How is the cohort drawn from that population?**
+
+**Stratified on engine agreement at the scoring moment, with every artifact's inclusion
+probability `π_i` recorded at draw time.**
+
+Let `m` = malicious assertions ÷ engines that answered, evaluated at the scoring moment.
+
+| Stratum | Rule | Target share |
+|---|---|---|
+| **Contested** | `0.2 < m < 0.8` | **45%** |
+| Leaning malicious | `0.8 ≤ m < 1.0` | 15% |
+| Leaning clean | `0 < m ≤ 0.2` | 15% |
+| Consensus malicious | `m = 1.0` | 10% |
+| Consensus clean | `m = 0` | 10% |
+| Injected known-good | not drawn — see below | 5% |
+
+Shares are **targets for the draw, not claims about the world.** They are provisional
+until stage 02 reports how many artifacts each band actually holds. A band that cannot
+fill its share is *reported*, never quietly back-filled from another.
+
+*Why stratify at all.* A flat draw at realistic prevalence yields too few positives to
+fit anything, and gives no control over how many hard cases are present.
+
+*Why on agreement rather than on the label.* There are no labels at draw time — that is
+the entire difficulty. Agreement is visible at reveal, costs nothing, and correlates with
+the label without being it.
+
+*Why the contested band is over-represented.* It is the only region where a hash lookup
+has not already answered the question, so it is where the score earns its keep. Drawing
+the confident ends instead — "most-definitely-bad" and "most-definitely-good" — deletes
+the middle, and a model that has never seen a hard case must extrapolate into exactly the
+region where it is deployed. `P(Y|X)` survives such a draw; usable data in the deployment
+region does not, and calibration there becomes unverifiable. This is the 2023 frame's
+failure on a different axis: it filtered to malicious assertions before labelling and so
+contained no artifact that nobody had detected.
+
+*Why `π_i` is recorded.* **Reversibility.** One draw then serves both views — weight by
+`1/π_i` for the natural-prevalence view that calibration and every rate metric require,
+or take the raw stratified draw for the balanced view that training wants. This is
+strictly better than `class_weight` or synthetic oversampling, which reach the same
+balance irreversibly. **A draw made without `π_i` cannot be corrected afterwards by any
+means**, which makes this the one decision here that is unrecoverable if skipped.
+
+*Minimum answering engines.* `m` is meaningless when two engines answered — one verdict
+moves it by 0.5. Artifacts below a floor of answering engines form their own stratum,
+reported separately and never folded into a band by a noisy ratio. **The floor itself is
+not yet set**; it needs the distribution of answer counts, which stage 02 produces.
+
+> This is a *different* axis from the **coverage tier** in [`06-signals.md`](./06-signals.md),
+> which counts available *signal families* (signature, sandbox, static) rather than engine
+> responses. Both are routing keys and neither is a feature, but they partition the data
+> differently and must not be conflated.
+
+### The injection arm
+
+The 5% known-good slice is **not drawn from PolySwarm.** It is externally sourced — NSRL
+joins against artifacts already held, vendor retractions, commodity package corpora,
+internal build artifacts — to cover a negative class the platform genuinely lacks (R9).
+Three rules contain it:
+
+1. **It never participates in prevalence estimation or `1/π_i` reweighting.** Its
+   inclusion probability is undefined by construction. It anchors the feature space; it
+   does not describe the population.
+2. **It carries a provenance column, excluded from features.** If injected known-good
+   arrives as a batch while malicious arrives organically, then tenant, timestamp,
+   `scan_config` and coverage patterns separate the classes perfectly and the model
+   learns the upload instead of the file.
+3. **A provenance probe gates the run.** Train a classifier to predict injected-vs-organic
+   from the *feature set*; above ~0.6 AUC the negatives are poisoned and the draw is
+   rejected. The same probe answers the feed-vs-customer question.
+
+*Value ordering inside the arm.* A negative's worth is inversely proportional to how
+obviously benign it is. Unsigned internal build artifacts and vendor retractions are worth
+more than signed Microsoft binaries, which anchor the bottom of the scale and teach little
+else.
+
+### Augmentation
+
+Strata may be topped up as the draw proceeds. **Augment on counts, never on performance.**
+"This stratum is below its target N" is a sampling decision. "The model does badly here"
+is a result, and feeding it back into the draw spends the test set without anyone
+noticing. The look-once rule in [`05-evaluation.md`](./05-evaluation.md) extends to
+sampling decisions.
+
 ---
 
-**Estimand version:** `1` · frozen 2026-09-22 · unsigned
+**Estimand version:** `3` · frozen 2026-09-24 · unsigned
 
-Record the signatory here when agreed. Any change to §1–§8 requires a version bump and
+| Version | Change |
+|---|---|
+| 1 (2026-09-22) | §1–§8 established |
+| 2 (2026-09-24) | §9 sampling design; per-artifact counting rule in §1 — [`0006`](../decisions/0006-stratified-sampling-with-recorded-inclusion-probabilities.md) |
+| 3 (2026-09-24) | §3 collapsed to four labels for the pilot — [`0007`](../decisions/0007-four-labels-for-the-pilot.md) |
+
+**No results have been produced under any version**, so no version bump here has
+invalidated anything. That stops being true the moment stage 09 runs once.
+
+Record the signatory here when agreed. Any change to §1–§9 requires a version bump and
 a record in `decisions/`.

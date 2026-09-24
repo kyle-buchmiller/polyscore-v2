@@ -28,6 +28,20 @@ FORBIDDEN_AS_FEATURES = frozenset(
 )
 
 
+#: Columns stage 01 writes to describe *how the row was drawn* (estimand §9). They are
+#: not late — they are simply not properties of the file. As features they are perfect
+#: provenance detectors: `provenance` separates the injected known-good arm from organic
+#: traffic outright, and `stratum` is a coarsening of engine agreement, which the feature
+#: matrix already holds. Bookkeeping throughout; reweighting reads them, models never do.
+BOOKKEEPING_NOT_FEATURES = frozenset(
+    {
+        "stratum",             # which §9 band the row was drawn from
+        "pi",                  # inclusion probability; 1/pi recovers natural prevalence
+        "provenance",          # organic, or which injected known-good source
+    }
+)
+
+
 class AsOfViolation(ValueError):
     """Raised when a field would leak information from after the scoring moment."""
 
@@ -53,6 +67,12 @@ def assert_as_of(fields: list[Field], scoring_moment: dt.datetime) -> None:
         raise AsOfViolation(
             f"fields are regenerated in place and cannot be features: {banned} "
             f"(see specs/02-data.md; they are fine for stratification)"
+        )
+    bookkeeping = sorted({f.name for f in fields} & BOOKKEEPING_NOT_FEATURES)
+    if bookkeeping:
+        raise AsOfViolation(
+            f"sampling bookkeeping cannot be features: {bookkeeping} "
+            f"(estimand §9; reweighting reads these, the model must not)"
         )
 
 

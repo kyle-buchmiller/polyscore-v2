@@ -58,6 +58,23 @@ Access and VBE. Select by whether the PE parser succeeded — the analyzer write
 `{'error': 'unsupported file'}` into its stored output on rejection, so the presence of
 `imphash` or `sections` is the positive test.
 
+## Columns the draw must record
+
+Estimand §9 draws stratified, and three columns are written by stage 01 alongside the
+features. They are **bookkeeping, never features** — `04_features.py` must not emit them,
+and the provenance probe in stage 06 is the check that it didn't.
+
+| Column | What it holds | Why it cannot be reconstructed later |
+|---|---|---|
+| `stratum` | which §9 band the artifact was drawn from | the band is defined at the scoring moment; engine verdicts accrue afterwards |
+| `pi` | the artifact's inclusion probability | depends on the band's population *at draw time* and on how much of the target share was already filled |
+| `provenance` | organic, or which injected known-good source | lost the moment the rows are mixed |
+
+`pi` is the load-bearing one. Everything that makes a stratified draw safe — reweighting
+to natural prevalence, the intercept correction, every rate metric — is `1/π_i` arithmetic,
+and **a draw made without it cannot be corrected by any later step.** One column, written
+once, or the cohort is only ever usable for ranking.
+
 ## The as-of rule
 
 The label comes from the future by construction (horizon T+30). If a feature also comes

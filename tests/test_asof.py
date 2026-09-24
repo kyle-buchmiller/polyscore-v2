@@ -43,3 +43,17 @@ def test_regenerated_fields_are_refused_even_when_timestamped_early(name):
     """
     with pytest.raises(AsOfViolation, match="regenerated in place"):
         assert_as_of([Field(name, T - dt.timedelta(days=1))], T)
+
+
+@pytest.mark.parametrize("name", ["stratum", "pi", "provenance"])
+def test_sampling_bookkeeping_is_refused_as_a_feature(name):
+    """Estimand §9 columns describe how a row was *drawn*, not what the file is.
+
+    As features they are perfect provenance detectors: `provenance` separates the
+    injected known-good arm from organic traffic outright, and `stratum` is a
+    coarsening of engine agreement the matrix already holds. Reweighting reads them;
+    the model must not. Unlike the regenerated deny-list above, these are not late —
+    they are simply not properties of the artifact.
+    """
+    with pytest.raises(AsOfViolation, match="bookkeeping"):
+        assert_as_of([Field(name, T - dt.timedelta(days=1))], T)

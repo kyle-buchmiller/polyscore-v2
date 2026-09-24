@@ -260,3 +260,33 @@ rollback, and the roster-drift and point-mass alarms from the rebuild plan.
 
 Deliberately last. Monitoring a system that has not shipped is premature — but this is
 what stops the next model freezing for three years without anyone noticing.
+
+---
+
+## F11 · Settle the reference population against what we actually answer for
+
+- **Gate:** a calibrated score, and lookup logs with tenant and timestamp.
+- **Size:** small once the logs exist; the decision is the work.
+
+Estimand §1 defines the population by **customer submission**, and records the hole that
+leaves: a customer hash-searches before uploading, so any file already in PolySwarm is
+invisible to the frame even while sitting on their disk — and we serve a score for it on
+every lookup. The frame describes what we *store*, not what we *answer for*.
+
+The candidate fix is **membership by lookup-or-submission, counted once**: an artifact
+enters if any customer ever asked about it, with the log answering *did anyone ask* and
+never *how often*. That closes the hole without letting query volume touch the base rate,
+which [`0006`](../decisions/0006-stratified-sampling-with-recorded-inclusion-probabilities.md)
+rejected for good reason — per-event weighting makes prevalence track usage mix, and a
+threat hunter and a blue-team analyst pull it in opposite directions.
+
+**Why it waits.** The reference population is the denominator for *calibration*, and the
+pilot's grade-1 labels may never calibrate ([`0004`](../decisions/0004-labels-time-separated-for-the-pilot.md)).
+So the question does not bind until grade-3 labels exist. Settle it before calibration is
+real — not before training is.
+
+**Measure first, decide second.** One number decides how much §1 has to move: of the
+scored responses we serve, what fraction are lookups rather than submissions? If lookups
+dominate — the likely case — then §1 currently describes a small minority of the answers
+we give, and the rewrite is worth the dependency. That measurement needs no model and no
+labels.
