@@ -46,6 +46,9 @@ by taking percentiles over a named cohort.
   a block the queue order collapses to whatever the sort is stable on.
 - Rank needs a named cohort ("percentile among what?") exactly as the probability needs
   a named population.
+- **This decision fixes the direction, not the build.** The design — cohort choice,
+  recompute cadence, field naming — is [`specs/08-future-work.md`](../specs/08-future-work.md) F1,
+  which cannot start until a calibrated score ships.
 
 ---
 

@@ -4,7 +4,9 @@ Known follow-ups — decisions **we** owe. Move an item into a spec once it is d
 record the decision in `decisions/`.
 
 Asks on **other teams** live in [`07-requests.md`](./07-requests.md). If an item needs
-somebody else to build something, it belongs there, not here.
+somebody else to build something, it belongs there, not here. Work that only becomes
+*possible* once the retrain succeeds lives in [`08-future-work.md`](./08-future-work.md) —
+this file is what blocks us now.
 
 ## Blocking the pilot
 
