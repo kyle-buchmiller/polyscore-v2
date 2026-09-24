@@ -35,6 +35,23 @@ Grade 1 is the pilot's training label. It breaks the fatal circularity because t
 carries information the features do not — but it is still engine-derived, so it can
 never validate a calibration curve.
 
+> **Third-party aggregators sit at grade 1, not above it.** VirusTotal and its equivalents
+> look like a cheap way to make labels ascertainable, and they are not: their engine
+> rosters overlap ours heavily, so the same vendors supply our *features* and their
+> *consensus*, and the label becomes partly a copy of the input. A model trained that way
+> learns to predict what the overlapping engines said — something it already has — and
+> estimand §8's `>0.97` stop rule fires, correctly.
+>
+> The ceiling is structural, not incidental: **grade measures independence from engine
+> opinion**, so anything built out of aggregated engine opinion is capped at 1 however
+> mature the system producing it. It therefore cannot touch the actual bottleneck, which
+> is grade 3 — while the grade-1 path below already exists and costs nothing. Commercial
+> and contractual exposure is discussed in [`0006`](../decisions/0006-stratified-sampling-with-recorded-inclusion-probabilities.md);
+> the methodological objection stands on its own without it.
+>
+> Only two things raise the grade, and both are internal: **detonation** (grade 2, gated
+> on R1) and **adjudication** (grade 3, gated on R3).
+
 ## Taxonomy
 
 | Label | Definition |

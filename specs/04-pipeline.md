@@ -46,14 +46,20 @@ types and will not silently turn a hash into a number.
 ## Stage contracts
 
 **01 · extract.** Query Postgres for PE instances matching estimand §1, inside the date
-window, with a deterministic `ORDER BY` before any limit. Write one parquet plus a
+window, with a deterministic `ORDER BY` before any limit. **Draw stratified per estimand
+§9, and write `stratum`, `pi` (the inclusion probability) and `provenance` as columns on
+every row.** `pi` is the one value that cannot be reconstructed after the fact — a draw
+missing it is not correctable by any later step, so the stage refuses to write a snapshot
+without it. Write one parquet plus a
 manifest recording the query, the window, the row count and a content hash. *The
 snapshot, not the query, is the unit of reproducibility* — re-running a query against a
 live database tomorrow returns different rows and silently invalidates everything
 downstream.
 
-**02 · compose.** Every count in the composition table, to stdout and to a file. No
-modelling. **Read it before continuing:** if distinct family clusters come back at 200,
+**02 · compose.** Every count in the composition table, to stdout and to a file, plus
+**realized stratum shares against their §9 targets** and the count below the coverage
+floor. A band that under-fills is reported as a shortfall; it is never back-filled from a
+neighbouring band, which would silently change the draw. No modelling. **Read it before continuing:** if distinct family clusters come back at 200,
 the real sample size is 200 and treating 10,000 as meaningful is a mistake that will
 propagate into every confidence interval.
 
@@ -69,9 +75,22 @@ the builder refuses anything stamped later than the scoring moment.
 gap, and ensure no family cluster straddles a boundary. Also write the random-split
 variant, clearly named as the optimistic one.
 
+> **Split first, rebalance second — and only the training fold.** The validate and test
+> folds keep natural prevalence, reconstructed by `1/π_i` weights from §9. Rebalancing
+> before the split contaminates calibration and test invisibly: the reliability diagram
+> comes out beautiful and means nothing, because it was measured against a prevalence we
+> manufactured. The injection arm is training-fold-only for the same reason, and is
+> excluded from every prevalence estimate.
+
 **06 · baselines.** The four baselines from estimand §7, before any model exists. **The
 most informative half hour in the project**: baseline 3 tells you immediately whether
 the labels are a tautology, and it costs no model at all.
+
+**Plus the provenance probe**, which is a gate rather than a report: a classifier trained
+to predict `provenance` (injected known-good vs organic) from the *feature set*. Above
+**~0.6 AUC** the negative class is poisoned — the model can identify the upload batch
+rather than the file — and the draw is rejected and redrawn, not patched. The same probe
+run against feed-vs-customer answers whether provenance is separable at all.
 
 **07 · train.** Exactly three comparisons — (a) logistic regression on the *old*
 one-column encoding, (b) the same model on the *new* two-column encoding, (c)
@@ -83,9 +102,27 @@ Brier — never a threshold metric like F1.
 > so, the pilot has taught the most useful lesson available: representation beats
 > algorithm.
 
-Drop `class_weight` entirely rather than replacing it. **No synthetic oversampling**
-(SMOTE and relatives): interpolating between sparse binary engine responses invents
-combinations that have never occurred and destroys calibration.
+Drop `class_weight` entirely rather than replacing it, and use **no synthetic
+oversampling** (SMOTE and relatives): interpolating between sparse binary engine responses
+invents combinations that have never occurred and destroys calibration.
+
+Neither is a ban on class balance — it is a ban on reaching balance *irreversibly*. The
+§9 draw already supplies it, and supplies it both ways: the raw stratified fold is the
+balanced view, `1/π_i` weights recover the natural-prevalence view, and the two come from
+one draw. What balance costs must then be paid back explicitly:
+
+- **Logistic regression.** Sampling on the outcome biases only the intercept — the slopes
+  stay consistent — so the correction is exact: add `logit(π_p)`, where `π_p` is the
+  reference population's true prevalence. At 2% prevalence that shift is **−3.89**, which
+  turns a balanced-model coin flip into 2.0%. Omit it and every number is inflated by
+  roughly that much.
+- **Gradient-boosted trees.** No such result holds. The sampling ratio changes which
+  splits are chosen, so the structure itself differs and no closed form repairs it. Trees
+  must be recalibrated empirically against a natural-prevalence held-out fold in stage 08.
+
+Both corrections need `π_p`, and a deliberately composed training set cannot measure it —
+that estimate comes from a separately drawn adjudicated sample (R3). Balancing does not
+avoid the label problem; it raises R3's priority.
 
 **08 · calibrate.** Fit two artefacts on **held-out** data: the *calibrator* (base score →
 probability, Platt or beta — **not isotonic** at pilot volumes, where it fits the
