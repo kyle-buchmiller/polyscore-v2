@@ -29,7 +29,7 @@ If you own a platform repo and landed here because PolyScore asked you for somet
 | Spec | Scope |
 |---|---|
 | [`specs/00-overview.md`](./specs/00-overview.md) | What this repo ships, where it sits, repo layout |
-| [`specs/01-estimand.md`](./specs/01-estimand.md) | The eight frozen decisions: population, scoring moment, label, horizon, split, metric, baselines, decision rule |
+| [`specs/01-estimand.md`](./specs/01-estimand.md) | The nine frozen decisions: population, scoring moment, label, horizon, split, metric, baselines, decision rule, sampling design |
 | [`specs/02-data.md`](./specs/02-data.md) | What is collected, from which source, and the as-of rule |
 | [`specs/03-labels.md`](./specs/03-labels.md) | Label taxonomy, grades, and how the pilot's labels are derived |
 | [`specs/04-pipeline.md`](./specs/04-pipeline.md) | The nine stages, their contracts, and what each writes |
