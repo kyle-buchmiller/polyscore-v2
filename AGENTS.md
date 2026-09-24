@@ -36,6 +36,7 @@ If you own a platform repo and landed here because PolyScore asked you for somet
 | [`specs/05-evaluation.md`](./specs/05-evaluation.md) | Metrics, baselines, the look-once rule, the standing controls |
 | [`specs/06-signals.md`](./specs/06-signals.md) | Signal vocabulary, presence semantics, coverage tiers, and the combiner contract |
 | [`specs/07-requests.md`](./specs/07-requests.md) | Capabilities other teams own that PolyScore needs — outward-facing |
+| [`specs/08-future-work.md`](./specs/08-future-work.md) | Work unlocked *by* a successful retrain — the ranking number, per-type calibrators, scope expansion |
 | [`specs/99-open-questions.md`](./specs/99-open-questions.md) | Known follow-ups and unresolved questions |
 
 Specs follow a strict convention: each opens with **Scope** and **Invariants**, is

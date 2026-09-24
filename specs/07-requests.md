@@ -5,7 +5,8 @@
 Capabilities **other teams own** that PolyScore needs, or would materially benefit from.
 Outward-facing: this page exists to be read by the people who would build these things.
 
-Distinct from [`99-open-questions.md`](./99-open-questions.md), which holds decisions
+Distinct from [`08-future-work.md`](./08-future-work.md), which holds work unlocked later
+by success, and from [`99-open-questions.md`](./99-open-questions.md), which holds decisions
 *we* owe. If an item is ours to decide, it belongs there. If it needs someone else to
 build something, it belongs here.
 

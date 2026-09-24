@@ -73,7 +73,7 @@ evidence, the system returns *no score and a reason* rather than a number.
 |---|---|
 | `specs/` | Design contracts. Authoritative on intent. |
 | `decisions/` | Dated decision records. Authoritative on why. |
-| `pipeline/` | The eight numbered stages, run in order by a human watching the output. |
+| `pipeline/` | The nine numbered stages, run in order by a human watching the output. |
 | `src/polyscore_v2/` | Shared code the stages import — config, io, db, features, labels, splits, metrics. |
 | `tests/` | Guards against the specific failure modes named in the specs. |
 | `data/` | Snapshots and outputs. Gitignored and reproducible; the manifest is the unit of reproducibility. |
