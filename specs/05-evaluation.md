@@ -45,10 +45,22 @@ both fits and measures cannot honour the rule above.
 | Grouped vs random split | how much was memorisation? | the gap is the finding |
 | Reliability diagram | do the numbers mean what they say? | dots on the diagonal; a rehearsal at pilot scale |
 | Brier score | ranking and honesty together | report against the base-rate Brier |
-| Per-slice metrics | does it work everywhere? | packed/unpacked, signed/unsigned, has-sandbox/no-sandbox |
+| **ROC-AUC on the §1 slice** | does it work *where it is deployed*? | **this is the headline number, not the pooled one** |
+| Per-slice metrics | does it work everywhere? | packed/unpacked, signed/unsigned, has-sandbox/no-sandbox, **feed/customer**, §9 stratum |
 
 Aggregate metrics routinely hide two large errors pointing in opposite directions, which
 is why the per-slice row is not optional.
+
+> **The §1 slice is the headline, because training is broader than the reference
+> population.** Estimand §10 lets the model learn from the whole store, feeds included;
+> §1 is the narrow frame the probability actually speaks about. A pooled metric mixes
+> them, and feed artifacts are easy — ingested largely because they are already known
+> malware — so pooling inflates the number with exactly the rows we are not trying to be
+> good at. A model that is excellent on feeds and mediocre on customer submissions must
+> not be able to report a good score, and only the sliced metric stops it.
+>
+> Quote pooled AUC nowhere. If a single number is needed, it is the one computed on §1's
+> population, reweighted by `1/π_i`.
 
 ## Three standing controls
 

@@ -45,8 +45,12 @@ types and will not silently turn a hash into a number.
 
 ## Stage contracts
 
-**01 · extract.** Query Postgres for PE instances matching estimand §1, inside the date
-window, with a deterministic `ORDER BY` before any limit. **Draw stratified per estimand
+**01 · extract.** Query Postgres for PE instances matching estimand **§10** — the
+*training* population, feeds included — inside the date window, with a deterministic
+`ORDER BY` before any limit. **Not §1**: §1 is the reference frame the calibrator is
+fitted on in stage 08, and drawing training data from it forfeits the contested band.
+Every row carries its `provenance`, which is what lets stage 08 select the §1 subset back
+out. **Draw stratified per estimand
 §9, and write `stratum`, `pi` (the inclusion probability) and `provenance` as columns on
 every row.** `pi` is the one value that cannot be reconstructed after the fact — a draw
 missing it is not correctable by any later step, so the stage refuses to write a snapshot
@@ -103,10 +107,17 @@ most informative half hour in the project**: baseline 3 tells you immediately wh
 the labels are a tautology, and it costs no model at all.
 
 **Plus the provenance probe**, which is a gate rather than a report: a classifier trained
-to predict `provenance` (injected known-good vs organic) from the *feature set*. Above
-**~0.6 AUC** the negative class is poisoned — the model can identify the upload batch
-rather than the file — and the draw is rejected and redrawn, not patched. The same probe
-run against feed-vs-customer answers whether provenance is separable at all.
+to predict `provenance` from the *feature set*. It runs **twice**, and both are blocking
+above **~0.6 AUC**:
+
+| Probe | What a failure means |
+|---|---|
+| injected known-good vs organic | the negative class is poisoned — the model can identify the upload batch rather than the file |
+| **feed vs customer** | §10's breadth is unsafe — provenance is a near-perfect proxy for the label once feeds are in, so the model would learn the ingestion path |
+
+A failure is fixed in the **feature set**, never by raising the threshold. If it cannot be
+fixed, the fallback is narrowing the training frame back toward §1 and accepting a thinner
+contested band — a real cost, and the reason the probe exists rather than a blanket ban.
 
 **07 · train.** Exactly three comparisons — (a) logistic regression on the *old*
 one-column encoding, (b) the same model on the *new* two-column encoding, (c)
@@ -140,7 +151,10 @@ Both corrections need `π_p`, and a deliberately composed training set cannot me
 that estimate comes from a separately drawn adjudicated sample (R3). Balancing does not
 avoid the label problem; it raises R3's priority.
 
-**08 · calibrate.** Fit two artefacts on **held-out** data: the *calibrator* (base score →
+**08 · calibrate.** Fit two artefacts on **held-out** data — and on the **§1 subset of
+it**, reweighted by `1/π_i`, never the full training frame. Stage 01 drew broadly per §10;
+this is the stage that narrows back, and it is the line that keeps feeds out of the base
+rate. Filter on `provenance` before fitting anything here. The *calibrator* (base score →
 probability, Platt or beta — **not isotonic** at pilot volumes, where it fits the
 calibration set exactly and looks wonderful for the wrong reason) and the *combiner*
 (the small fitted model over base score plus signal indicators, per

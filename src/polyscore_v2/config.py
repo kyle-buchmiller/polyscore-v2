@@ -22,7 +22,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #: 2 -> 3 (2026-09-24): SS3 collapsed to four labels for the pilot; known_good folded
 #: into benign (the grade carries attestation), dual_use into unwanted (a reason field
 #: carries it), excluded into the stage-01 cohort filter. See decisions/0007.
-ESTIMAND_VERSION = 3
+#: 3 -> 4 (2026-09-24): SS10 training population separated from SS1's reference
+#: population -- train on the whole store, calibrate on SS1 only. See decisions/0008.
+ESTIMAND_VERSION = 4
 
 #: --- estimand SS9: sampling design -------------------------------------------
 #: Target share of the draw per stratum, keyed by the name stage 01 writes into the
@@ -75,10 +77,24 @@ class Settings(BaseSettings):
     data_dir: Path = Path("./data")
 
     # --- estimand SS1: reference population ---------------------------------
+    # The frame the probability is ABOUT, and the frame the calibrator is fitted on.
+    # NOT the frame the model trains on -- that is SS10 and it is broader. See 0008.
     window_start: dt.date = dt.date(2026, 9, 8)  # post-indexing-fix, see specs/02-data.md
     window_end: dt.date | None = None
-    exclude_feed_rows: bool = True  # scan_config = 'feed'
     community: str = "public"
+
+    #: Feeds are excluded from the REFERENCE population only. Setting this False would
+    #: put feed rows in the calibration denominator, which is how the base rate starts
+    #: tracking how many feed contracts are switched on rather than anything about a
+    #: file. Stage 08 honours it; stage 01 must not.
+    reference_excludes_feeds: bool = True  # scan_config = 'feed'
+
+    # --- estimand SS10: training population ---------------------------------
+    #: The model may learn from the whole store, feeds included. True here means stage
+    #: 01 draws across provenances and stage 06's probe is what keeps it honest;
+    #: flipping it False narrows training back to SS1 and forfeits the contested band,
+    #: which the customer-submitted frame is too thin to fill.
+    train_on_feeds: bool = True
 
     # --- estimand SS4: horizon ----------------------------------------------
     horizon_days: int = 30

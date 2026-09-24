@@ -2,7 +2,7 @@
 
 ## Scope
 
-The nine decisions that define what the number means. **Frozen.** Changing any of
+The ten decisions that define what the number means. **Frozen.** Changing any of
 them invalidates every result produced under the old version; bump the version at the
 bottom and record the change in `decisions/`.
 
@@ -172,7 +172,12 @@ value lives in calibration and abstention rather than in ranking.
 
 ## 9 · Sampling design
 
-**How is the cohort drawn from that population?**
+**How is the cohort drawn from the training population (§10)?**
+
+> Not from §1. §1 is the *reference* population — the denominator that makes the
+> probability mean something — and it is deliberately narrow. What the model may **learn
+> from** is a different and broader question, answered in §10. Conflating them was a
+> defect in version 3 of this file.
 
 **Stratified on engine agreement at the scoring moment, with every artifact's inclusion
 probability `π_i` recorded at draw time.**
@@ -258,16 +263,65 @@ sampling decisions.
 
 ---
 
-**Estimand version:** `3` · frozen 2026-09-24 · unsigned
+## 10 · Training population
+
+**Which files may the model learn from?**
+
+**Every PE artifact PolySwarm holds inside the window — feeds included — plus §9's
+injection arm.** Deliberately broader than §1.
+
+*Why it is a separate decision.* §1 answers *what the number is about*; this answers
+*what the model may see*. They are different objects and forcing them to coincide buys
+nothing: the reference population must stay narrow so the base rate describes files a
+customer would recognise, while the model needs coverage of the feature space — above all
+the contested region, which the customer-submitted frame is far too thin to supply. Feeds
+are abundant and carry labels.
+
+*Why this is statistically safe.* Selection that depends on the **features** rather than
+on the outcome preserves `P(Y|X)`, so a model trained on a broader frame estimates the
+same conditional. What broadening costs is coverage in the deployment region and the
+ability to verify it — which is exactly what the guards below are for. Selection on the
+**outcome** is a different matter and is handled by §9's recorded `π_i`.
+
+*Why §9 is what makes this safe.* Without stratification, feeds would swamp the cohort:
+they are ingested largely because they are known malware, so they arrive at near-unanimous
+consensus and would pile into one band. §9 caps `consensus malicious` at 10% and holds
+`contested` at 45%, so a broader frame fills the bands it can and the hard region keeps
+its share. The two decisions are complements, not independent choices.
+
+### Three guards, and the line they protect
+
+1. **Feature hygiene.** No provenance-bearing column may become a feature — not
+   `scan_config`, tenant, submission timing, ingestion path, `stratum` or `provenance`.
+   Enforced by `FORBIDDEN_AS_FEATURES` and `BOOKKEEPING_NOT_FEATURES` in
+   [`features.py`](../src/polyscore_v2/features.py). Without this the model learns
+   *where a row came from*, and feed-provenance is a near-perfect proxy for the label.
+2. **The provenance probe** (stage 06) extends to **feed-vs-customer**, not only
+   injected-vs-organic. Above ~0.6 AUC the frames are separable from the features alone
+   and training broad is not safe — fix the features or narrow the frame.
+3. **The headline metric is computed on the §1 slice**, never pooled. A model that is
+   excellent on feeds and mediocre on customer submissions must not be able to report a
+   good number, and pooled metrics let it.
+
+**The line: training may be broad, calibration may not.** Stage 08 fits the calibrator on
+§1's population, reweighted by `1/π_i`. The model learns from everything; the probability
+speaks about something specific. That separation is what keeps feeds out of the base rate
+— so switching on a new feed contract changes what the model has *seen* and never what
+the number *claims*, which was the whole objection to a store-wide reference population.
+
+---
+
+**Estimand version:** `4` · frozen 2026-09-24 · unsigned
 
 | Version | Change |
 |---|---|
 | 1 (2026-09-22) | §1–§8 established |
 | 2 (2026-09-24) | §9 sampling design; per-artifact counting rule in §1 — [`0006`](../decisions/0006-stratified-sampling-with-recorded-inclusion-probabilities.md) |
 | 3 (2026-09-24) | §3 collapsed to four labels for the pilot — [`0007`](../decisions/0007-four-labels-for-the-pilot.md) |
+| 4 (2026-09-24) | §10 training population, separated from §1's reference population — [`0008`](../decisions/0008-training-population-is-broader-than-the-reference-population.md) |
 
 **No results have been produced under any version**, so no version bump here has
 invalidated anything. That stops being true the moment stage 09 runs once.
 
-Record the signatory here when agreed. Any change to §1–§9 requires a version bump and
+Record the signatory here when agreed. Any change to §1–§10 requires a version bump and
 a record in `decisions/`.
