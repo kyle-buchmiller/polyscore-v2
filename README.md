@@ -32,7 +32,7 @@ The specs are authoritative; the diagrams follow them.
 specs/       design contracts — authoritative on intent
              (07-requests.md: what we need from other teams)
 decisions/   dated decision records — authoritative on why
-pipeline/    the eight numbered stages, run in order
+pipeline/    the nine numbered stages, run in order
 src/         shared code the stages import
 tests/       guards against the failure modes in specs/05
 data/        snapshots and outputs (gitignored)
