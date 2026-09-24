@@ -80,7 +80,26 @@ things a fully-informed owner of that machine would not agree to, for someone el
 benefit — assessed as of a stated date.
 
 Four labels, not two: `malicious`, `benign`, `unwanted`, `undecidable`. Train on the
-first two; report the other two as rates. Full taxonomy in
+first two; report the other two as rates.
+
+*Why four and not seven.* A finer taxonomy was specified first — separating attested
+`known_good` from adjudicated `benign`, `dual_use` from `unwanted`, and carving out
+`excluded` — and was **collapsed for the pilot** ([`0007`](../decisions/0007-four-labels-for-the-pilot.md)).
+Four is a claim about how many categories a 10,000-file cohort can populate, not about
+how many the world has: at realistic prevalence the finer classes hold tens of files
+each, which is too few to train on, too few to measure a rate from, and enough to make
+every count look more precise than it is. Nothing was discarded — the attestation moved
+to the **grade**, `dual_use` to a **reason field**, and `excluded` to the **cohort
+filter**, where it belonged.
+
+*Why the two rate-only labels are not folded into the binary.* Because the size of that
+decision is unknown until it is measured. If `unwanted` is 1% of traffic, folding it
+either way is a footnote; at 25% it is the single biggest determinant of what the score
+means. Excluding them from training does **not** exclude them from production — the model
+scores them anyway, having never seen one — so the rate is how that blind spot is sized.
+Re-expanding the taxonomy is a new estimand version, not a code change.
+
+Full taxonomy, the fold map and the rate denominators in
 [`03-labels.md`](./03-labels.md).
 
 ## 4 · Horizon
@@ -239,11 +258,16 @@ sampling decisions.
 
 ---
 
-**Estimand version:** `2` · frozen 2026-09-24 · unsigned
+**Estimand version:** `3` · frozen 2026-09-24 · unsigned
 
-Version 1 (frozen 2026-09-22) added §1–§8; version 2 adds §9 and the per-artifact counting
-rule in §1, per [`0006`](../decisions/0006-stratified-sampling-with-recorded-inclusion-probabilities.md).
-No results were produced under version 1.
+| Version | Change |
+|---|---|
+| 1 (2026-09-22) | §1–§8 established |
+| 2 (2026-09-24) | §9 sampling design; per-artifact counting rule in §1 — [`0006`](../decisions/0006-stratified-sampling-with-recorded-inclusion-probabilities.md) |
+| 3 (2026-09-24) | §3 collapsed to four labels for the pilot — [`0007`](../decisions/0007-four-labels-for-the-pilot.md) |
+
+**No results have been produced under any version**, so no version bump here has
+invalidated anything. That stops being true the moment stage 09 runs once.
 
 Record the signatory here when agreed. Any change to §1–§9 requires a version bump and
 a record in `decisions/`.

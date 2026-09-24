@@ -50,7 +50,13 @@ window, with a deterministic `ORDER BY` before any limit. **Draw stratified per 
 §9, and write `stratum`, `pi` (the inclusion probability) and `provenance` as columns on
 every row.** `pi` is the one value that cannot be reconstructed after the fact — a draw
 missing it is not correctable by any later step, so the stage refuses to write a snapshot
-without it. Write one parquet plus a
+without it.
+
+**Non-candidates are dropped here, not labelled.** EICAR, test files, and artifacts the
+PE parser rejected were never in the running, so they are filtered at extraction with
+**the count reported** — `excluded` is a cohort filter, not a label ([`03-labels.md`](./03-labels.md)).
+An unreported filter is silent shrinkage, which is the same failure as an unreported
+`undecidable` rate arriving two stages later. Write one parquet plus a
 manifest recording the query, the window, the row count and a content hash. *The
 snapshot, not the query, is the unit of reproducibility* — re-running a query against a
 live database tomorrow returns different rows and silently invalidates everything
@@ -63,9 +69,19 @@ neighbouring band, which would silently change the draw. No modelling. **Read it
 the real sample size is 200 and treating 10,000 as meaningful is a mistake that will
 propagate into every confidence interval.
 
-**03 · label.** Apply the [`03-labels.md`](./03-labels.md) rules at T+30. Write a label
-per file with its grade, source and horizon. Keep `undecidable` rows in the file but
-flagged, so they can be excluded from training and still counted in the report.
+**03 · label.** Apply the [`03-labels.md`](./03-labels.md) rules at T+30. Write one of
+the **four** pilot labels per file with its grade, reason, source and horizon;
+`assert_pilot_labels` refuses anything outside them, so a pre-collapse label cannot reach
+a split and silently join a class. Keep `undecidable` and `unwanted` rows in the file but
+flagged, so they are excluded from training and still counted in the report.
+
+**Emit each rate-only label three ways** — raw over the drawn cohort, reweighted by
+`1/π_i`, and split per §9 stratum. They answer different questions and the first two
+genuinely differ: the contested band is over-weighted by design and `undecidable`
+concentrates there, so the raw rate **overstates** the population rate. Quote the
+reweighted one as a ceiling; quote the raw one when correcting the cohort's effective
+size. The per-stratum split is the cheap check that labelling tracks difficulty at all —
+`undecidable` spread evenly across bands means the rule is wrong.
 
 **04 · features.** Build the ~120 numeric columns from [`02-data.md`](./02-data.md).
 **The as-of rule is enforced here**, mechanically — every field carries a timestamp and

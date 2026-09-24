@@ -34,3 +34,4 @@ than one that records being right.
 | [0004](./0004-labels-time-separated-for-the-pilot.md) | Pilot labels are time-separated consensus, not adjudication | Accepted |
 | [0005](./0005-composite-polyscore-via-a-fitted-combiner.md) | Composite PolyScore via a fitted combiner (amends 0001) | Accepted |
 | [0006](./0006-stratified-sampling-with-recorded-inclusion-probabilities.md) | Stratified sampling with recorded inclusion probabilities | Accepted |
+| [0007](./0007-four-labels-for-the-pilot.md) | Four labels for the pilot (reconciles §3 with 03-labels) | Accepted |

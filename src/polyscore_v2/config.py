@@ -19,7 +19,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #:
 #: 1 -> 2 (2026-09-24): added SS9 sampling design and the per-artifact counting rule
 #: in SS1. See decisions/0006. No results were produced under version 1.
-ESTIMAND_VERSION = 2
+#: 2 -> 3 (2026-09-24): SS3 collapsed to four labels for the pilot; known_good folded
+#: into benign (the grade carries attestation), dual_use into unwanted (a reason field
+#: carries it), excluded into the stage-01 cohort filter. See decisions/0007.
+ESTIMAND_VERSION = 3
 
 #: --- estimand SS9: sampling design -------------------------------------------
 #: Target share of the draw per stratum, keyed by the name stage 01 writes into the
