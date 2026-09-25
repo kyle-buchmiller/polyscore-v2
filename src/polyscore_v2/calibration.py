@@ -2,9 +2,15 @@
 
 See specs/06-signals.md. Two artefacts, two versions, two refit cadences:
 
-    base model   ranks. Retrained rarely (weeks).
+    base model   DISCRIMINATES -- emits a raw score whose ordering is the trustworthy
+                 part. It does not emit a rank. Retrained rarely (weeks).
     calibrator   base score -> probability. Refit on drift (monthly).
     combiner     [base score, signals] -> polyscore. Refit when a signal is added (minutes).
+
+The product's ranking number is a percentile of the finished polyscore over a named
+cohort -- downstream of all three of these, and not built (08-future-work.md F1).
+Calibration is monotone, so it cannot change the ordering, which is the same fact as
+ROC-AUC being invariant under it.
 
 THE INVARIANT (decision 0001, as amended by 0005): composition is FITTED, never asserted.
 `logit += w` where w was fitted keeps the output a probability. `score * k, clamp` does

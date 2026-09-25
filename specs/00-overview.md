@@ -48,12 +48,20 @@ A retrain reproduces all three with fresher coefficients.
 
 ```
 engine evidence ->  base model  ->  raw score --+
-                    (ranks)                     |
+                  (discriminates)                |
 signature signals --------------------------> COMBINER -> coverage gate -> score record
 sandbox signals ----------------------------->  (small,    (may refuse     (polyscore,
                                                  fitted)    to answer)      status,
                                                                             components)
 ```
+
+> **"Rank" means two different things and they are not the same step.** The base model
+> *discriminates*: it emits a raw score whose **ordering** is the part that can be trusted,
+> which is what ROC-AUC measures and all it measures. It never emits a rank. The product
+> **ranking number** — a percentile of the finished `polyscore` over a named cohort — is
+> downstream of everything in this diagram and is not built yet
+> ([`08-future-work.md`](./08-future-work.md) F1). Ordering is a property of the score;
+> a rank is a separate artifact computed from the score plus a cohort.
 
 The discriminator and the calibrator are **separately versioned** and fitted on
 different data. The calibrator is the mechanism that makes the number a probability,
