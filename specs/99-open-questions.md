@@ -56,6 +56,14 @@ What remains ours to decide:
   sampling probability cannot be reconstructed later. Estimand §9 now fixes this for the
   *training* draw; the audit arm is the same discipline applied to the **deployment**
   population, and it still has no owner.
+- **Two clock questions, both cheap and both blocking any date arithmetic.**
+  `artifactinstance.created` is written by Postgres `now()` (server-local) while
+  `completed` is written by Python `datetime.now(timezone.utc)`, and the column type
+  carries no timezone. If the session TZ is not UTC the two columns are on different
+  clocks and `completed - created` is wrong. Verify against prod before differencing.
+  Separately: **nothing in `artifact-index` writes `delete_at`**, so whether another
+  service or a retention job physically removes `artifactinstance` rows is unknown —
+  confirm before relying on "history is never destroyed."
 - **Reference-population remeasurement.** The 37%-indexed figure predates the
   September 2026 fixes; a fresh measurement changes the estimand's §1 caveat.
 

@@ -24,6 +24,28 @@ a different product.
 
 ## Where to pull from
 
+> **Postgres, never Elasticsearch.** The ES document holds exactly two scans —
+> `scan.first_scan` and `scan.latest_scan` — and is **overwritten on every rescan**, so it
+> is current-state only and cannot answer an as-of question. It also renders engine
+> identity as a *display name* resolved at write time from an external, mutable,
+> unversioned lookup, which is the mechanism behind the 2023 model's alias splitting.
+> Postgres stores the engine **address** and keeps every scan as its own row. The old
+> pipeline's live training path read from ES; that is one of the reasons it could not be
+> reconstructed.
+
+### Schema facts that are easy to get wrong
+
+| Fact | Consequence |
+|---|---|
+| Every foreign key targets `artifactinstance.number`, **not** the primary key `id` | join on `number` |
+| `number` is a **random 17-digit integer**, not a sequence | **never `ORDER BY number`**; `id` is the time-ordered column |
+| `assertions` has **no timestamp column at all** | per-assertion arrival time is unrecoverable; the scan is the finest time resolution available. Relative order survives via the monotonic `assertions.id` |
+| `assertions.mask` is hardcoded `TRUE` at write | vestigial; filtering on it is a no-op, and it cannot distinguish no-answer. The 2023 pipeline filtered on it anyway |
+| `window_closed` is a boolean, and is set for known-good rows that never ran | use `completed IS NOT NULL` to mean "revealed" |
+| Rescan **inserts a new row**; assertions are INSERT-only with no UPDATE or DELETE path | history is genuinely append-only, which is what makes the as-of rule implementable |
+
+
+
 **Postgres for the feature matrix.** It keeps one row per *scan*, with that scan's own
 assertions and analyzer output, so "what did we know at scan N" is a keyed read.
 
@@ -89,7 +111,11 @@ Known offenders that must never become features:
 - `polyunite` output — regenerated and overwritten in place, folding in families that
   arrived weeks later from sandbox runs and tags;
 - rolled-up `detections` counts, `tags`, `families` — same problem;
-- the incumbent `polyscore` on any scan after the scoring moment.
+- the incumbent `polyscore` on any scan after the scoring moment — and note `polyscore`
+  and `detections` carry a second, sharper defect: both are write-once guarded, **but the
+  admin backfills recompute them for NULL rows at backfill time and record nothing about
+  when.** For an older row these fields can be far younger than the scan they hang off,
+  so even the scan's own timestamp does not bound them.
 
 These are fine for **stratification and survey**, where knowing the future is harmless.
 

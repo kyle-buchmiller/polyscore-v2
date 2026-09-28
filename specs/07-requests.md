@@ -241,9 +241,10 @@ Verified to exist, so they are not asks:
 
 | Capability | Where |
 |---|---|
-| **Bulk rescan over an id range** — how a T+30 label horizon is manufactured for a frozen cohort | `ai instance rescan <start> <end> -c <chunk>` |
+| **Bulk rescan over a *date* range** — how a T+30 label horizon is manufactured for a frozen cohort | `ai instance rescan <start> <end> -c <chunk>`, where start/end are **timestamps, not ids** — binary-searched against `artifactinstance.created` internally |
 | **Static PE analysis already stored per scan** — imphash, certificate chains, section entropy, imports, `is_probably_packed` | `pefile` / `lief` analyzer output |
 | **Authenticode verification with chain flags and thumbprints** | DN-8374, shipped 2026-09-22 |
 | **Per-scan history in Postgres** — one row per scan, making as-of reconstruction a keyed read | `artifactinstance` |
-| **Three-state engine verdicts** — malicious / benign / no-answer, already recorded | `Assertion.verdict` (nullable boolean) |
+| **Four-state engine verdicts** — malicious / benign / answered-unknown / never-responded | `Assertion.verdict` nullable boolean (`TRUE`/`FALSE`/`NULL`) **plus row absence** as the fourth state |
+| **Reveal timestamp per scan** | `artifactinstance.completed` — *not* `window_closed`, which is a boolean and is also set for known-good rows that never ran |
 | **A benchmarked bulk metadata extractor** — 62.9M records in 5h27m | `ps-firehose dump` |
