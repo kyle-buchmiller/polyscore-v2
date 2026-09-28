@@ -32,6 +32,18 @@ a different product.
 > Postgres stores the engine **address** and keeps every scan as its own row. The old
 > pipeline's live training path read from ES; that is one of the reasons it could not be
 > reconstructed.
+>
+> **The one exception, and it is narrow.** ES is the *clean* test for "did the PE parser
+> succeed": a rejected `pefile` document is stripped to `{}` and removed entirely, so
+> `exists: pefile.imphash` is exact, with none of the out-of-line trap below. That test is
+> safe to take from ES precisely because it is **time-invariant** — a file's bytes do not
+> change, so whether `pefile.PE()` parsed them cannot drift. Nothing time-varying may come
+> from ES.
+>
+> But ES carries `meta_community` and carries **neither `community` nor `scan_config`**, so
+> it cannot express the feed filter, while Postgres cannot cheaply express the PE filter.
+> **Cohort selection needs both stores**: Postgres for the filters and all history, ES for
+> PE confirmation.
 
 ### Schema facts that are easy to get wrong
 
@@ -75,10 +87,45 @@ of which 256 were hard zeros.
 
 ## Selecting the PE cohort
 
-Do **not** select by mimetype: `WINDOWS_EXECUTABLE_MIMETYPES` also admits CAB, MSI, MS
-Access and VBE. Select by whether the PE parser succeeded — the analyzer writes
-`{'error': 'unsupported file'}` into its stored output on rejection, so the presence of
-`imphash` or `sections` is the positive test.
+Do **not** select by mimetype. `WINDOWS_EXECUTABLE_MIMETYPES` (nine values) is the
+**analyzer dispatch list, not a PE selector** — four of the nine are not PE at all (CAB,
+MSI in three spellings, MS Access, VBE), and `application/x-dosexec` covers plain MZ/DOS
+binaries too.
+
+Select by whether the PE parser succeeded. The rejection document is exactly
+`{"error": "unsupported file"}` and nothing else.
+
+> **Two corrections to the obvious test.** `sections` is **not** a valid positive: it is
+> initialised to `[]` early and only filled inside a broad `try/except` commented
+> *"malformed PE files are the norm"*, so a genuinely parsed PE can carry `sections: []`.
+> And `pe.get_imphash()` returns **`""`** for a PE with no import table — so the test is
+> **key presence**, never truthiness.
+
+> ⚠️ **The out-of-line trap, which silently biases the cohort.** `tool_metadata` is a
+> hybrid property with a size-based storage switch: documents at or above
+> `AI_METADATA_OUT_OF_LINE_SIZE` go to psstorage and leave `tool_metadata NULL`. That
+> threshold **defaults to 4000 but us-prod overrides it to 2000**, and a real parsed-PE
+> document (sections, imports, resources, certificate) is far larger — while the 32-byte
+> rejection document is *always* inline. So a query written as
+> `tool_metadata ? 'imphash'` returns a small subset **skewed toward rejections**. Out-of-line
+> storage is the signal that the parse *succeeded*, not a row to skip.
+
+The JSON path is `artifactmetadata.tool_metadata -> 'imphash'` — **flat, not namespaced**.
+The `pefile.` prefix is added at ES-serialization time and does not exist in Postgres.
+Join `metadata.artifact_instance_id → artifactinstance.number` and
+`metadata.artifact_metadata_id → artifactmetadata.number`, both on `number`, never `id`.
+
+## The cohort filters, and how each one bites
+
+| Filter | Column | The trap |
+|---|---|---|
+| exclude feeds | `scan_config` | Value domain is `{default, more-time, most-time, feed}` **plus NULL**, and NULL is common (URL artifacts, known-good rows). `scan_config <> 'feed'` silently drops every NULL — use **`IS DISTINCT FROM 'feed'`**. It is a plain `String` with no DB constraint; the four names come from a seed, so confirm against `SELECT name FROM scan_configs` before trusting the list. |
+| exclude feeds, part two | `actions` (JSONB) | The **stronger** marker. polyfeeder writes `{'_default': False, …}`, so most feed rows are **storage-only and never scanned** — they have no assertions at all. Absent mapping, absent key and absent `_default` all mean *enabled*. |
+| public only | `meta_community` | Values are **`'_public'` / `'_development'` / a private community's own name** — with leading underscores. The bare strings `'public'`/`'development'` are a *separate* metrics bucketing that is **never stored in this column**, so filtering on `'public'` returns nothing. |
+| exclude internal | `api_key` (`CHAR(32)`) | `''` marks sandbox-derived dropped files; internal re-submissions carry the service key, so filtering them needs the prod `AKM_API_KEY` value. |
+| tenant | `billing_id`, `user_account_number` | Team account and sub-account. There is no `tenant` column — `X-Request-Tenant` is request-scoped and never persisted. |
+
+`weak_ref` looks like a bulk marker and is not — it is written nowhere. Do not use it.
 
 ## Columns the draw must record
 

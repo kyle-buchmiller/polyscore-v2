@@ -225,7 +225,15 @@ value lives in calibration and abstention rather than in ranking.
 **Stratified on engine agreement at the scoring moment, with every artifact's inclusion
 probability `π_i` recorded at draw time.**
 
-Let `m` = malicious assertions ÷ engines that answered, evaluated at the scoring moment.
+Let `m` = malicious assertions ÷ engines that **gave a definite verdict** (malicious or
+benign), evaluated at the scoring moment. Engines that answered `unknown` (`verdict IS
+NULL`) and engines that never responded (no row) are **excluded from the denominator**,
+not counted as benign — collapsing either into `0` is the 2023 model's error.
+
+> This matches the stored `detections` JSONB (`{benign, malicious, total}`, where
+> `total = benign + malicious`), so `m = malicious / total` — but **compute it from the
+> assertion rows, not from that column**: `detections` is recomputed by admin backfills
+> with nothing recording when, so it can be far younger than its own scan.
 
 | Stratum | Rule | Target share |
 |---|---|---|

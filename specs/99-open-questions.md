@@ -45,6 +45,27 @@ What remains ours to decide:
 - **One combiner or one per coverage tier.** Deliberately left data-driven: fit one, report
   calibration per tier, split if the curves diverge. Somebody has to actually look.
 
+## Verify against prod before stage 01 runs
+
+Cheap `SELECT`s that each decide a filter. None needs a model, a label or a decision —
+only access.
+
+- **`SELECT name FROM scan_configs;`** — the four names are a seed, and the table is
+  mutable. The feed filter rests on this list being exhaustive.
+- **`extended_type` distribution** for `mimetype = 'application/x-dosexec'` — decides
+  whether a `LIKE 'PE32%'` pre-filter has acceptable recall, and whether 64-bit `PE32+`
+  and `.NET` variants are described as expected. Affects recall only; ES is the real gate.
+- **The prod `AKM_API_KEY`** — needed to exclude internal re-submissions by `api_key`.
+  Without it, some `ai instance rescan` traffic stays in the cohort.
+- **ClickHouse `hash_searches` retention** — no `TTL` in the migration, so the window is
+  unknown. Gates F11.
+- **Which community polyfeeder submits into** — a per-sink DB config, not a static value.
+  If feeds land in a private community the `_public` filter already excludes them and the
+  `scan_config` filter is belt-and-braces; if not, both are load-bearing.
+- **`any_detections`** — two independent reads of the code disagreed about whether it is
+  ever written. Treat it as unwritten and use the `detections` JSONB until a `SELECT`
+  settles it.
+
 ## Blocking a real model
 
 - **Inter-analyst agreement in the 0.3–0.7 band.** Never measured. It is the ceiling on

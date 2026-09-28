@@ -265,8 +265,24 @@ what stops the next model freezing for three years without anyone noticing.
 
 ## F11 · Settle the reference population against what we actually answer for
 
-- **Gate:** a calibrated score, and lookup logs with tenant and timestamp.
-- **Size:** small once the logs exist; the decision is the work.
+- **Gate:** a calibrated score. **The lookup logs exist** — see below.
+- **Size:** small; the decision is the work.
+
+> **Resolved 2026-09-28: hash lookups are recorded.** Not in Postgres — every hash search
+> publishes a `HashSearch` event (`views/v3/search.py`, in a `finally:` so it fires even on
+> an empty result) to the Kafka topic `hash_searches`, sinking to the ClickHouse
+> **`hash_searches`** distributed table. It carries `timestamp`, `sha256`, `hash_value`,
+> `hash_type`, `account_id` (the user), `team_account_id` (the billing tenant),
+> `client_ip`, `offset` and **`has_results`**.
+>
+> `has_results` is better than we asked for: it distinguishes *"a customer asked about a
+> file we hold"* from *"a customer asked about a file we do not hold"* — the second being
+> direct evidence of the submission gap §1 describes, measurable without any model or
+> label. A sibling `metadata_searches` table records full metadata queries the same way.
+>
+> **What is still unknown is retention.** The migration carries no `TTL` clause, so how far
+> back the data actually goes is an operational question, not a code one. Answer that
+> before designing around it.
 
 Estimand §1 defines the population by **customer submission**, and records the hole that
 leaves: a customer hash-searches before uploading, so any file already in PolySwarm is
