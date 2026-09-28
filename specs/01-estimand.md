@@ -55,6 +55,49 @@ like this."
 > log answering "did anyone ask about this file" and never "how often" — is recorded in
 > [`08-future-work.md`](./08-future-work.md).
 
+### How this is enforced
+
+**Not by the training frame.** §10 trains deliberately broader, so nothing about §1 is
+enforced there. It is enforced in exactly one place: **stage 08 fits the calibrator on
+the §1 subset of held-out data**, reweighted by `1/π_i`. The calibrator is two fitted
+floats, and those two floats *are* this population's base rate — so §1 lives in the
+serving path as a parameter, nowhere else.
+
+Today that is prose plus a config flag (`reference_excludes_feeds`), not a guard. Unlike
+the as-of rule, the label grades and the sampling bookkeeping, **nothing raises if the
+calibrator is fitted on the wrong rows** — it would run clean, produce a healthy-looking
+reliability diagram, and be wrong by a constant. Worth closing.
+
+### One population is a choice, not a limit
+
+Because the calibrator is a separate 1-in-1-out artifact, **several can exist over one
+model with no retraining** — each is two more floats. That makes per-file-type, per
+coverage tier, per-population and even **per-customer** calibration reachable
+([`08-future-work.md`](./08-future-work.md) F3, F4), tailoring what the number means to
+the population a given consumer actually sees.
+
+Three things bound it:
+
+- **Labels, not compute.** Each calibrator needs its own held-out *adjudicated* set. The
+  200-file gold slice split six ways is ~33 files and one or two positives per cell —
+  unfittable. The real ceiling is R3's budget.
+- **Routing must be stable and knowable at scoring time.** A file that moves between
+  calibrators gets a different number with no evidence having changed.
+- **Per-customer calibration trades away a property we have otherwise held.** Two
+  customers would see two numbers for the same artifact. That is a defensible product
+  decision — their populations genuinely differ — but it is in direct tension with
+  "the score should not depend on who is looking," and it should be taken deliberately
+  rather than arrived at. It is also only valid under *label* shift; if tenants differ
+  in file-type mix rather than just base rate, a prior shift repairs the aggregate while
+  making per-band calibration worse (F4).
+
+The cheap first move is not to split at all: fit one calibrator, **report reliability per
+group anyway**, and split only where the curves visibly diverge. That keeps it a
+measurement rather than an architectural guess.
+
+*This section describes how §1 is enforced and does not change what §1 decides, so it
+carries no version bump.*
+
 > **Date caveat.** Until early September 2026 an artifact only reached the metadata
 > index if something *came back* about it. A cohort drawn from the historical index
 > over-represents successfully-analysed files, which is the opposite of what the
