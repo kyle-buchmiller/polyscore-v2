@@ -13,15 +13,36 @@ from sqlalchemy import create_engine
 
 from .config import settings
 
-#: mimetype is necessary but NOT sufficient -- WINDOWS_EXECUTABLE_MIMETYPES also admits
-#: CAB, MSI, MS Access and VBE. The authoritative PE test is whether the pefile analyzer
-#: succeeded: it writes {'error': 'unsupported file'} on rejection, so the presence of
-#: imphash or sections is the positive test.
+#: mimetype is necessary but NOT sufficient -- WINDOWS_EXECUTABLE_MIMETYPES has nine
+#: values and four are not PE (CAB, MSI in three spellings, MS Access, VBE), and
+#: x-dosexec covers plain MZ/DOS binaries too. These three are the PE-bearing subset,
+#: used as a cheap pre-filter only.
 PE_MIMETYPES = (
     "application/x-dosexec",
     "application/vnd.microsoft.portable-executable",
     "application/x-msdownload",
 )
+
+#: The authoritative PE test is whether the pefile analyzer succeeded, and it must be
+#: asked of OpenSearch rather than Postgres. Three reasons, in descending order of how
+#: badly each one bites:
+#:
+#: 1. OUT-OF-LINE STORAGE. artifactmetadata.tool_metadata is a hybrid property with a
+#:    size switch: documents at or above AI_METADATA_OUT_OF_LINE_SIZE go to psstorage
+#:    and leave the column NULL. us-prod sets that threshold to 2000. A real parsed-PE
+#:    document is far larger; the 32-byte rejection doc {"error": "unsupported file"} is
+#:    always inline. So `tool_metadata ? 'imphash'` returns a set SKEWED TOWARD
+#:    REJECTIONS -- the exact opposite of the intended filter.
+#: 2. `sections` is not a valid positive: it is initialised to [] and filled inside a
+#:    broad try/except, so a genuinely parsed PE can carry sections: [].
+#: 3. get_imphash() returns "" for a PE with no import table, so any test must be key
+#:    PRESENCE, never truthiness.
+#:
+#: In OpenSearch a rejected pefile document is stripped to {} and removed, so
+#: `exists: pefile.imphash` is exact. Taking it from ES is safe here and only here,
+#: because the test is TIME-INVARIANT -- a file's bytes do not change, so whether the
+#: parser handled them cannot drift. Nothing time-varying may come from ES.
+PE_CONFIRM_FIELD = "pefile.imphash"
 
 
 def engine():
