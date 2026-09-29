@@ -20,6 +20,11 @@
 \set window_start '2026-09-08'
 \set window_end   '2026-10-01'
 \set horizon_days 30
+-- Upper bound on the label gap. T+30 is a TARGET, not a floor: a label taken at
+-- T+400 reflects 13x more detection accrual than one at T+31, so mixing them puts
+-- two different measurements in one column -- and the spread is not random, since
+-- rescans are user-driven. Set from 01_survey's gap distribution; PROVISIONAL.
+\set horizon_max_days 90
 \set cohort_size  10000
 \set seed         '20260922'
 \set min_definite 5
@@ -54,15 +59,21 @@ feature_scan AS (
      ORDER BY s.sha256, s.number
 ),
 label_scan AS (
-    SELECT fs.sha256,
-           min(ai.completed) AS label_moment,
-           min(ai.number)    AS label_instance_number
+    -- The NEAREST scan at or after the horizon, bounded above. DISTINCT ON rather
+    -- than min() so the instance number belongs to the same row as the timestamp
+    -- -- min(completed) and min(number) are not guaranteed to be the same scan.
+    SELECT DISTINCT ON (fs.sha256)
+           fs.sha256,
+           ai.completed AS label_moment,
+           ai.number    AS label_instance_number,
+           ai.completed - fs.scoring_moment AS label_gap
       FROM feature_scan fs
       JOIN artifactinstance ai
         ON ai.sha256 = fs.sha256
-       AND ai.completed >= fs.scoring_moment + (:horizon_days || ' days')::interval
+       AND ai.completed >= fs.scoring_moment + (:horizon_days     || ' days')::interval
+       AND ai.completed <  fs.scoring_moment + (:horizon_max_days || ' days')::interval
      WHERE ai.completed IS NOT NULL AND ai.failed IS NOT TRUE
-     GROUP BY fs.sha256
+     ORDER BY fs.sha256, ai.completed ASC
 ),
 verdicts AS (
     SELECT fs.sha256,
@@ -74,7 +85,7 @@ verdicts AS (
 ),
 eligible AS (
     SELECT fs.sha256, fs.instance_number, fs.scoring_moment,
-           l.label_moment, l.label_instance_number,
+           l.label_moment, l.label_instance_number, l.label_gap,
            v.n_definite, v.n_malicious,
            CASE
              WHEN v.n_malicious::float / v.n_definite = 0    THEN 'consensus_clean'
@@ -120,6 +131,7 @@ SELECT r.sha256,
        r.scoring_moment,
        r.label_instance_number,
        r.label_moment,
+       r.label_gap,          -- carried so heterogeneity is visible in the file itself
        r.stratum,
        r.n_definite,
        r.n_malicious,
@@ -141,3 +153,8 @@ SELECT r.sha256,
 -- 2. Is pi <= 1.0 everywhere? pi = 1.0 means the band was taken whole, which is
 --    legitimate but means that band carries no sampling variance.
 -- 3. Does the row count match the sum of n_draw? A mismatch means a join fanned out.
+-- 4. Is label_gap tightly clustered? A long right tail means the label means
+--    different things across rows, and the tolerance above needs narrowing. Check
+--    per stratum too: if contested rows systematically carry longer gaps than
+--    consensus ones, the label heterogeneity is correlated with difficulty, which
+--    is the worst available shape for it.

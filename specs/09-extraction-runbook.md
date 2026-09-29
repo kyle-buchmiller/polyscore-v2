@@ -393,6 +393,7 @@ nothing.
 | `instance_number` | the **feature** scan (T) — join assertions on this |
 | `scoring_moment` | T; every feature must be true at or before it |
 | `label_instance_number`, `label_moment` | the **label** scan (T+30) |
+| `label_gap` | realized T→label interval. **Check its spread** — T+30 is a target with a tolerance, not a floor |
 | `stratum` | §9 band |
 | `n_definite`, `n_malicious` | the inputs to `m`, kept so the band is auditable |
 | **`pi`** | **inclusion probability — the irreplaceable column** |

@@ -56,15 +56,20 @@ feature_scan AS (
 -- T+30: does a later scan exist to label from? Without one the row is
 -- unlabellable and must not be counted as available.
 label_scan AS (
-    SELECT fs.sha256,
-           min(ai.completed) AS label_moment
+    -- NEAREST scan at or after the horizon, deliberately UNBOUNDED above here --
+    -- the survey's job is to show how far out the tail actually goes so the
+    -- tolerance in 02_draw.sql can be set from data rather than guessed.
+    SELECT DISTINCT ON (fs.sha256)
+           fs.sha256,
+           ai.completed AS label_moment,
+           ai.completed - fs.scoring_moment AS label_gap
       FROM feature_scan fs
       JOIN artifactinstance ai
         ON ai.sha256 = fs.sha256
        AND ai.completed >= fs.scoring_moment + (:horizon_days || ' days')::interval
      WHERE ai.completed IS NOT NULL
        AND ai.failed IS NOT TRUE
-     GROUP BY fs.sha256
+     ORDER BY fs.sha256, ai.completed ASC
 ),
 -- m, at the feature scan. Denominator is engines that gave a DEFINITE verdict.
 -- verdict IS NULL (answered "unknown") and no-row (never responded) are both
@@ -83,6 +88,7 @@ banded AS (
            v.n_definite,
            v.n_responded,
            (l.sha256 IS NOT NULL) AS labellable,
+           l.label_gap,
            CASE WHEN v.n_definite IS NULL OR v.n_definite < 5 THEN 'below_floor'
                 ELSE CASE
                   WHEN v.n_malicious::float / v.n_definite = 0   THEN 'consensus_clean'
@@ -103,7 +109,15 @@ SELECT stratum,
              / nullif(sum(count(*) FILTER (WHERE labellable)) OVER (), 0), 1)
                                                   AS pct_of_labellable,
        round(avg(n_definite)::numeric, 1)         AS avg_definite_verdicts,
-       round(avg(n_responded)::numeric, 1)        AS avg_responded
+       round(avg(n_responded)::numeric, 1)        AS avg_responded,
+       -- The label-gap distribution. T+30 is a TARGET, not a floor: a label taken
+       -- at T+400 carries far more detection accrual than one at T+31, so a long
+       -- tail here means the label means different things across rows.
+       justify_interval(percentile_disc(0.50)
+             WITHIN GROUP (ORDER BY label_gap))    AS gap_p50,
+       justify_interval(percentile_disc(0.90)
+             WITHIN GROUP (ORDER BY label_gap))    AS gap_p90,
+       justify_interval(max(label_gap))            AS gap_max
   FROM banded
  GROUP BY stratum
  ORDER BY artifacts DESC;
@@ -117,6 +131,14 @@ SELECT stratum,
 --     contested 45 | leaning_* 15 each | consensus_* 10 each
 -- The targets are a claim about where the hard cases live, made before anyone
 -- looked. If `contested` comes back at 3%, the bands move -- not the draw.
+--
+-- THE GAP COLUMNS SET A PARAMETER. gap_p50/p90/max are what 02_draw.sql's
+-- horizon_max_days should be chosen from. If p90 is ~35 days, a 90-day tolerance
+-- is generous and harmless. If p90 is 200 days, most labels are not T+30 labels at
+-- all and the horizon needs rethinking before the draw -- not after.
+-- Compare gaps ACROSS strata too: if contested rows carry systematically longer
+-- gaps than consensus ones, label heterogeneity is correlated with difficulty,
+-- which is the worst available shape for it.
 --
 -- `below_floor` is the answering-engine floor (specs/99-open-questions.md), set
 -- to 5 here as a PLACEHOLDER. If this bucket is large, the floor is doing more

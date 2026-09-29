@@ -18,6 +18,12 @@ this file is what blocks us now.
 - **Engine clustering.** The label rules require counting *independent clusters*, not
   engines. The similarity work exists in `polyscore-pipeline` but is orphaned; it needs
   porting or replacing.
+- **The label-gap tolerance (`horizon_max_days`).** T+30 is a target, not a floor, so the
+  draw bounds how far past the horizon a label may be taken. The bound is provisionally 90
+  days and is meant to be set from the gap distribution stage 02 reports. Two outcomes
+  change the plan rather than the parameter: a p90 far beyond the horizon means most labels
+  are not T+30 labels, and gaps that are systematically longer for contested artifacts than
+  for consensus ones mean the heterogeneity tracks difficulty.
 - **The §9 band thresholds, and the answering-engine floor.** `0.2` and `0.8` were chosen
   before anyone looked at how the bands actually populate, and the 45% contested share is
   an assertion about where the hard cases live, not a measurement. The minimum answering

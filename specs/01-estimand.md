@@ -156,6 +156,22 @@ The 180-day re-check yields the **churn rate** — the fraction of files called 
 30 days that turn malicious later — which is a hard floor on the lowest score that can
 honestly be emitted, and settles whether a true zero is reachable at all.
 
+*T+30 is a target with a tolerance, not a floor.* No scan lands exactly on the horizon,
+so the label comes from the **nearest scan at or after it** — but "at or after" cannot mean
+*any* later scan. Detection accrual is roughly monotone, so a label taken at T+400 reflects
+an order of magnitude more accrual than one at T+31; mixing them puts two different
+measurements in one column. Worse, the spread is not random: rescan timing is user-driven,
+so a long gap correlates with how interesting somebody found the file.
+
+So the pipeline **records the realized gap per row** and bounds it above. The bound is a
+parameter (`horizon_max_days`), set from the gap distribution stage 02 reports rather than
+guessed — and if gaps turn out to be systematically longer for contested artifacts than for
+consensus ones, the heterogeneity is correlated with difficulty, which is the worst
+available shape for it and a reason to stop.
+
+This is also why the T+180 re-check is a **separate** measurement rather than a wider
+window: churn is the thing being measured, so it cannot also be absorbed into the label.
+
 *Practical note.* A T+30 label only exists for files actually rescanned around then,
 and rescans are user-driven and therefore non-random. Freeze the cohort, bulk-enqueue
 its rescans (`ai instance rescan <start> <end>`), and harvest labels after the horizon.
