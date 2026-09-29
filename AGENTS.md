@@ -38,6 +38,7 @@ If you own a platform repo and landed here because PolyScore asked you for somet
 | [`specs/07-requests.md`](./specs/07-requests.md) | Capabilities other teams own that PolyScore needs — outward-facing |
 | [`specs/08-future-work.md`](./specs/08-future-work.md) | Work unlocked *by* a successful retrain — the ranking number, per-type calibrators, scope expansion |
 | [`specs/09-extraction-runbook.md`](./specs/09-extraction-runbook.md) | **Operational**: how to run stage 01 against prod — access paths, step order, expected volumes |
+| [`specs/10-estimand-b-settled-state.md`](./specs/10-estimand-b-settled-state.md) | **Proposed**: Estimand B — settled-state labels over the full history, as a comparison arm against A |
 | [`specs/99-open-questions.md`](./specs/99-open-questions.md) | Known follow-ups and unresolved questions |
 
 Specs follow a strict convention: each opens with **Scope** and **Invariants**, is

@@ -172,6 +172,16 @@ available shape for it and a reason to stop.
 This is also why the T+180 re-check is a **separate** measurement rather than a wider
 window: churn is the thing being measured, so it cannot also be absorbed into the label.
 
+> **This horizon is what constrains A to recent artifacts**, and it is not repairable by
+> choosing a different T. An artifact first seen five years ago, rescanned today, yields a
+> T+1825 label; and two scans thirty days apart in its third year give a clean gap and a
+> near-worthless label, because accrual is front-loaded and by then the verdicts have
+> stopped moving. The alternative — a **stability-based** label criterion that can use aged
+> artifacts — is drafted as [Estimand B](./10-estimand-b-settled-state.md) and run as an
+> explicit comparison ([`0009`](../decisions/0009-a-second-estimand-for-aged-artifacts.md)),
+> not as a replacement. A's churn rate is what should set B's convergence parameters, so
+> **A runs first.**
+
 *Practical note.* A T+30 label only exists for files actually rescanned around then,
 and rescans are user-driven and therefore non-random. Freeze the cohort, bulk-enqueue
 its rescans (`ai instance rescan <start> <end>`), and harvest labels after the horizon.
