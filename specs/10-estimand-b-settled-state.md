@@ -11,7 +11,8 @@ can be compared. Written as a **delta against [`01-estimand.md`](./01-estimand.m
 **PROPOSED. Not frozen. No version number yet.** A is the pilot; this is the comparison
 arm. It becomes frozen — and acquires `ESTIMAND_B_VERSION = 1` — only if the go/no-go in
 §B8 says to build it. Rationale in
-[`0009`](../decisions/0009-a-second-estimand-for-aged-artifacts.md).
+[`0009`](../decisions/0009-a-second-estimand-for-aged-artifacts.md); how to run it in
+[`11-extraction-runbook-b.md`](./11-extraction-runbook-b.md).
 
 ## Invariants
 

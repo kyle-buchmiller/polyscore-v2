@@ -96,6 +96,7 @@ specs/       design contracts — authoritative on intent
              (07-requests.md: what we need from other teams)
              (08-future-work.md: what success unlocks later)
              (09-extraction-runbook.md: how to actually run stage 01)
+             (10/11: Estimand B — the aged-artifact comparison arm, proposed)
 decisions/   dated decision records — authoritative on why
 pipeline/    the nine numbered stages, run in order
 src/         shared code the stages import
