@@ -18,6 +18,15 @@ this file is what blocks us now.
 - **Engine clustering.** The label rules require counting *independent clusters*, not
   engines. The similarity work exists in `polyscore-pipeline` but is orphaned; it needs
   porting or replacing.
+- **The label-gap tolerance (`horizon_max_days`) — now known to be load-bearing.**
+  Measured on stage 2026-09-29 over a 2024–2026 window: the nearest scan at or after T+30
+  had a **median gap of 92 days for contested artifacts and 218 days for consensus-clean
+  ones, with a maximum of 518 days.** So "nearest scan after the horizon" is routinely
+  *hundreds* of days out, and an unbounded rule would have produced a column mixing T+31
+  and T+518 labels. The bound is not theoretical.
+  **And the gap correlates with the band** — contested artifacts are rescanned far sooner
+  than clean ones, presumably because they are more interesting. That is the correlation
+  §4 warns about, observed. Whether it holds at prod volume is the thing to check.
 - **The label-gap tolerance (`horizon_max_days`).** T+30 is a target, not a floor, so the
   draw bounds how far past the horizon a label may be taken. The bound is provisionally 90
   days and is meant to be set from the gap distribution stage 02 reports. Two outcomes
@@ -68,9 +77,10 @@ only access.
 - **Which community polyfeeder submits into** — a per-sink DB config, not a static value.
   If feeds land in a private community the `_public` filter already excludes them and the
   `scan_config` filter is belt-and-braces; if not, both are load-bearing.
-- **`any_detections`** — two independent reads of the code disagreed about whether it is
-  ever written. Treat it as unwritten and use the `detections` JSONB until a `SELECT`
-  settles it.
+- ~~**`any_detections`**~~ — **settled 2026-09-29 on stage.** The column is `NOT NULL
+  DEFAULT false`, so it is non-null on every row *by default* and never set true (519/519
+  non-null, 0 true). Both code reads were partly right: it is defaulted, not assigned. It
+  carries no information — use the `detections` JSONB.
 
 ## Blocking a real model
 
@@ -83,14 +93,14 @@ only access.
   sampling probability cannot be reconstructed later. Estimand §9 now fixes this for the
   *training* draw; the audit arm is the same discipline applied to the **deployment**
   population, and it still has no owner.
-- **Two clock questions, both cheap and both blocking any date arithmetic.**
-  `artifactinstance.created` is written by Postgres `now()` (server-local) while
-  `completed` is written by Python `datetime.now(timezone.utc)`, and the column type
-  carries no timezone. If the session TZ is not UTC the two columns are on different
-  clocks and `completed - created` is wrong. Verify against prod before differencing.
-  Separately: **nothing in `artifact-index` writes `delete_at`**, so whether another
-  service or a retention job physically removes `artifactinstance` rows is unknown —
-  confirm before relying on "history is never destroyed."
+- **The clock question — answered on stage, still open on prod.** Measured 2026-09-29
+  against `us-stage-blue`: session `TimeZone = UTC`, median `completed - created` =
+  **31.7s**, min **30.1s**, and **zero rows with `completed < created`**. So `created`
+  (Postgres `now()`) and `completed` (Python UTC) are on the same clock there, and the lag
+  matches `bounty_duration`. **Re-run on prod** — it is a server setting, not a code fact.
+- **`delete_at` is written by nothing in `artifact-index`**, so whether another service or
+  a retention job physically removes `artifactinstance` rows is unknown — confirm before
+  relying on "history is never destroyed." Estimand B depends on the answer.
 - **Reference-population remeasurement.** The 37%-indexed figure predates the
   September 2026 fixes; a fresh measurement changes the estimand's §1 caveat.
 

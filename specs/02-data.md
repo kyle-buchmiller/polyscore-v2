@@ -120,12 +120,23 @@ Join `metadata.artifact_instance_id → artifactinstance.number` and
 | Filter | Column | The trap |
 |---|---|---|
 | exclude feeds | `scan_config` | Value domain is `{default, more-time, most-time, feed}` **plus NULL**, and NULL is common (URL artifacts, known-good rows). `scan_config <> 'feed'` silently drops every NULL — use **`IS DISTINCT FROM 'feed'`**. It is a plain `String` with no DB constraint; the four names come from a seed, so confirm against `SELECT name FROM scan_configs` before trusting the list. |
-| exclude feeds, part two | `actions` (JSONB) | The **stronger** marker. polyfeeder writes `{'_default': False, …}`, so most feed rows are **storage-only and never scanned** — they have no assertions at all. Absent mapping, absent key and absent `_default` all mean *enabled*. |
+| exclude feeds, part two | `actions` (JSONB) | polyfeeder writes `{'_default': False, …}` for most items — but it scans a configurable fraction (`scan_percentages`), so **how many feed rows are storage-only is a per-environment setting, not a fact.** Measured on stage 2026-09-29: feed rows were **0% storage-only and 100% revealed**, the opposite of the code's default posture. Measure on prod before relying on it either way. Absent mapping, absent key and absent `_default` all mean *enabled*. |
 | public only | `meta_community` | Values are **`'_public'` / `'_development'` / a private community's own name** — with leading underscores. The bare strings `'public'`/`'development'` are a *separate* metrics bucketing that is **never stored in this column**, so filtering on `'public'` returns nothing. |
 | exclude internal | `api_key` (`CHAR(32)`) | `''` marks sandbox-derived dropped files; internal re-submissions carry the service key, so filtering them needs the prod `AKM_API_KEY` value. |
 | tenant | `billing_id`, `user_account_number` | Team account and sub-account. There is no `tenant` column — `X-Request-Tenant` is request-scoped and never persisted. |
 
 `weak_ref` looks like a bulk marker and is not — it is written nowhere. Do not use it.
+
+> ⚠️ **The `actions` filter may be the largest single reducer of the cohort, and nobody
+> has sized it.** Measured on stage 2026-09-29: of rows with `scan_config = 'default'` —
+> ordinary customer submissions — **87% (433/497) carried `_default: false`**, i.e. they
+> were stored and never scanned. A stored-but-unscanned artifact has no assertions, so it
+> cannot be a feature row at all.
+>
+> If that ratio holds on prod, the §1 population is roughly an order of magnitude smaller
+> than a raw row count suggests, and the 10,000-file target needs checking against it
+> before anything is drawn. Stage traffic is small and partly synthetic, so this is a
+> **warning to measure**, not a number to plan around.
 
 ## Columns the draw must record
 
