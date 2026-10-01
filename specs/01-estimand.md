@@ -299,8 +299,17 @@ means**, which makes this the one decision here that is unrecoverable if skipped
 
 *Minimum answering engines.* `m` is meaningless when two engines answered — one verdict
 moves it by 0.5. Artifacts below a floor of answering engines form their own stratum,
-reported separately and never folded into a band by a noisy ratio. **The floor itself is
-not yet set**; it needs the distribution of answer counts, which stage 02 produces.
+reported separately and never folded into a band by a noisy ratio.
+
+> **Make the floor relative, not absolute.** Measured on six stage artifacts 2026-09-30:
+> typical coverage was **15–16 answering engines**, and the one artifact whose T scan
+> caught only **7** produced the sample's largest apparent change — `m` moved 2/7 → 7/14
+> with **zero engines changing their verdict**. The entire move was the engine sample
+> filling in, and the newcomers skewed malicious (5/7) against the originals (2/7).
+>
+> A flat floor of 5 would have admitted that artifact. A floor expressed as a *fraction of
+> typical coverage* would not. The floor is still unset pending prod volume, but it should
+> be specified relative to the observed distribution rather than as a bare count.
 
 > This is a *different* axis from the **coverage tier** in [`06-signals.md`](./06-signals.md),
 > which counts available *signal families* (signature, sandbox, static) rather than engine

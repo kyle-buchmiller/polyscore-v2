@@ -123,6 +123,31 @@ with an attacker's address baked in is `malicious` even though the framework ins
 `unwanted`/`dual_use`; configuration changes the answer. A legitimate signed DLL abused by
 sideloading is `benign` — the file is fine, the campaign is not, and we score files.
 
+## What actually changes between T and the label
+
+Two different mechanisms move `m`, and they are not interchangeable:
+
+| Mechanism | What it is |
+|---|---|
+| **Verdict flips** | an engine present at both moments gives a different answer — genuine learning, and retractions |
+| **Engine turnover** | engines appear or disappear between scans; nobody changed their mind |
+
+Measured on six stage artifacts 2026-09-30: **5 verdict flips, 10 engines joined, 4 left.**
+Both are real and they are unevenly distributed — three artifacts saw no change at all,
+two changed purely by flips, and one changed purely by turnover.
+
+**For the label, turnover is fine.** We want the best available assessment at the horizon,
+and more engines is a better assessment. The label does not care who supplied it.
+
+**For any statement about *change*, turnover is a confound.** The churn rate (§4), the
+retraction signal (R9) and "how much did verdicts move" all intend to measure engines
+revising their opinions. Computed naively they would count an engine that simply showed up
+late. So any such diagnostic must be computed over **engines present at both moments**, and
+report turnover separately rather than folding it in.
+
+The draw already carries what is needed — `n_definite` at T and at the label — so the
+coverage delta is recoverable per row and should be reported alongside the churn rate.
+
 ## Producing the pilot's labels
 
 1. **Wait out the horizon**, then pull each artifact's verdicts again at T+30.

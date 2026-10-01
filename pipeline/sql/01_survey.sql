@@ -117,7 +117,14 @@ SELECT stratum,
              WITHIN GROUP (ORDER BY label_gap))    AS gap_p50,
        justify_interval(percentile_disc(0.90)
              WITHIN GROUP (ORDER BY label_gap))    AS gap_p90,
-       justify_interval(max(label_gap))            AS gap_max
+       justify_interval(max(label_gap))            AS gap_max,
+       -- Coverage at T. A band whose artifacts answer with far fewer engines than
+       -- typical is not comparable to one at full coverage: m over 7 of ~16 engines
+       -- is a small and possibly biased sample, and its apparent movement by the
+       -- horizon is largely the sample filling in rather than anyone learning.
+       -- This is what the answering-engine floor must be set against.
+       min(n_definite)                             AS definite_min,
+       percentile_disc(0.10) WITHIN GROUP (ORDER BY n_definite) AS definite_p10
   FROM banded
  GROUP BY stratum
  ORDER BY artifacts DESC;
