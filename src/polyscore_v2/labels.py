@@ -109,6 +109,73 @@ def label_at_horizon(history: pd.DataFrame) -> LabelResult:
     raise NotImplementedError("stage 03 — see specs/03-labels.md")
 
 
+@dataclass(frozen=True)
+class ChangeDecomposition:
+    """How much of a T -> label move was opinion, and how much was attendance.
+
+    Two mechanisms shift `m` between the scoring moment and the horizon, and they do
+    not mean the same thing:
+
+      flips    an engine present at BOTH moments answered differently. Genuine
+               revision -- this is what the horizon is supposed to capture, and
+               retractions (flips True -> False) are the strongest negatives we have.
+      joined   an engine that was absent at T answered by the horizon. Nobody
+               revised anything; the sample filled in.
+      left     an engine present at T was absent at the horizon.
+
+    Measured on six stage artifacts 2026-09-30: 5 flips, 10 joined, 4 left -- so both
+    are real and unevenly spread. One artifact moved from 2/7 to 7/14 malicious with
+    ZERO flips: its T scan had caught only 7 of a typical 16 engines, and the arrivals
+    skewed malicious. Read naively that looks like a dramatic late detection; it is
+    attendance.
+
+    Consequence: the label may use everyone (more engines is a better assessment), but
+    any statement ABOUT change -- churn, retraction rate, "how much did verdicts move"
+    -- must be computed over `both` only, with turnover reported beside it rather than
+    folded in.
+    """
+
+    flips: int           # present at both, verdict differs
+    retractions: int     # of those, True -> False specifically
+    joined: int          # absent at T, present at the horizon
+    left: int            # present at T, absent at the horizon
+    stable: int          # present at both, verdict identical
+
+    @property
+    def both(self) -> int:
+        """Engines present at both moments -- the only comparable population."""
+        return self.flips + self.stable
+
+    @property
+    def turnover_rate(self) -> float:
+        """Share of the engine union that is attendance rather than opinion."""
+        union = self.both + self.joined + self.left
+        return (self.joined + self.left) / union if union else 0.0
+
+
+def decompose_change(
+    at_t: dict[str, bool | None], at_label: dict[str, bool | None]
+) -> ChangeDecomposition:
+    """Split a T -> label move into revision and turnover.
+
+    Both arguments map engine ADDRESS (never a display name -- see specs/02-data.md) to
+    that engine's verdict: True, False, or None for an explicit "unknown". An engine
+    that never responded is simply absent from the mapping, which is the fourth state.
+
+    A flip requires presence at both moments. Appearing or disappearing is turnover and
+    is never counted as a changed opinion.
+    """
+    both = set(at_t) & set(at_label)
+    flips = [a for a in both if at_t[a] != at_label[a]]
+    return ChangeDecomposition(
+        flips=len(flips),
+        retractions=sum(1 for a in flips if at_t[a] is True and at_label[a] is False),
+        joined=len(set(at_label) - set(at_t)),
+        left=len(set(at_t) - set(at_label)),
+        stable=len(both) - len(flips),
+    )
+
+
 def assert_calibration_eligible(grades: pd.Series) -> None:
     """Refuse to fit a calibrator on anything below grade 3.
 

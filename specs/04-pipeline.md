@@ -79,6 +79,12 @@ the **four** pilot labels per file with its grade, reason, source and horizon;
 a split and silently join a class. Keep `undecidable` and `unwanted` rows in the file but
 flagged, so they are excluded from training and still counted in the report.
 
+**Report the change decomposition**, via `labels.decompose_change`: flips, retractions,
+joined, left, and the turnover rate. The churn rate (§4) and the retraction signal are
+both computed over **engines present at both moments only** — an engine that merely showed
+up late is not a revised opinion, and counting it as one would overstate both. Report
+turnover beside them, never folded in.
+
 **Emit each rate-only label three ways** — raw over the drawn cohort, reweighted by
 `1/π_i`, and split per §9 stratum. They answer different questions and the first two
 genuinely differ: the contested band is over-weighted by design and `undecidable`

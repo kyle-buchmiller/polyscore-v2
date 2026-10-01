@@ -163,6 +163,26 @@ an order of magnitude more accrual than one at T+31; mixing them puts two differ
 measurements in one column. Worse, the spread is not random: rescan timing is user-driven,
 so a long gap correlates with how interesting somebody found the file.
 
+*Exactly 30 is neither achievable nor required.* A rescan is enqueued, queued, then runs
+a bounty with its own window before it reveals, so even a forced rescan lands at T+30 plus
+hours. What matters is **homogeneity** — that every row's label is the same measurement —
+not the integer 30.
+
+Two ways to schedule the forced rescan, and they differ by more than convenience:
+
+| Schedule | Resulting gaps |
+|---|---|
+| **One batch**, at `max(T) + 30` | `[30, 30 + window_width]` — a one-week freeze window yields 30–37 day gaps. Narrowing the window tightens the label and shrinks the cohort |
+| **Daily tranches** — each day's submissions rescanned 30 days later | **≈30 days for every row, at any cohort size.** Costs a scheduled job instead of one command, and dissolves the size-versus-homogeneity trade |
+
+Prefer tranches. The batch form is the fallback when a scheduled job is not available.
+
+*The deeper reason forcing beats waiting.* A forced rescan does not remove variance — it
+removes **correlated** variance. Natural gaps are set by when somebody chose to look at the
+file again, which correlates with how interesting it is, and therefore with the outcome.
+Scheduled gaps are set by us and correlate with nothing about the artifact. A ±7-day spread
+we created is harmless; a ±7-day spread that selected on interest is not.
+
 So the pipeline **records the realized gap per row** and bounds it above. The bound is a
 parameter (`horizon_max_days`), set from the gap distribution stage 02 reports rather than
 guessed — and if gaps turn out to be systematically longer for contested artifacts than for

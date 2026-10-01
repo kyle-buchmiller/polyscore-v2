@@ -19,6 +19,7 @@ from polyscore_v2.labels import (
     Label,
     assert_calibration_eligible,
     assert_pilot_labels,
+    decompose_change,
 )
 
 
@@ -66,3 +67,40 @@ def test_pre_collapse_labels_are_refused(stray):
     """
     with pytest.raises(ValueError, match="outside the pilot taxonomy"):
         assert_pilot_labels(pd.Series(["benign", stray]))
+
+
+def test_turnover_is_not_counted_as_a_changed_opinion():
+    """The failure this guards: an engine that merely showed up late reads as a flip.
+
+    Reproduces the stage artifact that moved 2/7 -> 7/14 malicious with zero engines
+    revising anything. Read naively that is dramatic late detection; it is attendance.
+    """
+    at_t = {"0xaa": False, "0xbb": True}
+    at_label = {"0xaa": False, "0xbb": True, "0xcc": True, "0xdd": True}
+    d = decompose_change(at_t, at_label)
+    assert d.flips == 0, "nobody revised anything"
+    assert d.joined == 2
+    assert d.both == 2
+    assert d.stable == 2
+
+
+def test_a_retraction_is_a_flip_and_is_counted_separately():
+    """An engine that detected and later stopped is the strongest negative available."""
+    d = decompose_change({"0xaa": True, "0xbb": True}, {"0xaa": False, "0xbb": True})
+    assert d.flips == 1
+    assert d.retractions == 1
+    assert d.joined == d.left == 0
+
+
+def test_absent_and_unknown_are_different_states():
+    """verdict IS NULL ("answered unknown") is presence; no row at all is absence."""
+    present_unknown = decompose_change({"0xaa": None}, {"0xaa": True})
+    assert present_unknown.flips == 1 and present_unknown.joined == 0
+    absent = decompose_change({}, {"0xaa": True})
+    assert absent.flips == 0 and absent.joined == 1
+
+
+def test_turnover_rate_is_share_of_the_union():
+    d = decompose_change({"0xaa": True}, {"0xaa": True, "0xbb": False, "0xcc": False})
+    assert d.both == 1 and d.joined == 2
+    assert d.turnover_rate == pytest.approx(2 / 3)
