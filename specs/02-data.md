@@ -55,6 +55,7 @@ a different product.
 | `assertions.mask` is hardcoded `TRUE` at write | vestigial; filtering on it is a no-op, and it cannot distinguish no-answer. The 2023 pipeline filtered on it anyway |
 | `window_closed` is a boolean, and is set for known-good rows that never ran | use `completed IS NOT NULL` to mean "revealed" |
 | Rescan **inserts a new row**; assertions are INSERT-only with no UPDATE or DELETE path | history is genuinely append-only, which is what makes the as-of rule implementable |
+| The read replica is a **hot standby** (`pg_is_in_recovery() = true`) and refuses `CREATE TEMP TABLE` | measured 2026-10-01. Any key set — the confirmed-PE hashes, the base's instance numbers — must ride in as a **query parameter** (`= ANY(array)`, chunked), never a temp table. `01_extract.py` does this; a hand-written `psql` session cannot |
 
 
 

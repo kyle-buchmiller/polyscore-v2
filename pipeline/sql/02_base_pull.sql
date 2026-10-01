@@ -15,10 +15,12 @@
 -- gap is recorded per row and bounded above. The forced-rescan VALIDATION arm is a
 -- separate, small pull (runbook step 6) and is never trained on.
 --
--- PRECONDITION: pe_confirmed(sha256) temp table from the OpenSearch pass, loaded in
--- THIS session. Confirming PE after the pull would be fine for the base (pi_base is
--- 1 either way) but the run draw's pi is computed against the base's band
--- populations, so the base must already be the confirmed set.
+-- THE PE GATE IS NOT HERE. The replica is a hot standby and refuses CREATE TEMP TABLE
+-- (measured 2026-10-01: pg_is_in_recovery() = true, ReadOnlySqlTransaction on any
+-- CREATE), so the confirmed-PE set cannot be joined in SQL. 01_extract.py applies it
+-- in pandas AFTER this pull and BEFORE writing the base, so the base Parquet is still
+-- the confirmed set and the run draw's pi is still computed over confirmed-PE band
+-- populations. The mimetype predicate below is the cheap pre-filter only.
 
 \set window_start     '2026-09-08'
 \set window_end       '2026-10-01'
@@ -28,7 +30,6 @@
 WITH scoped AS (
     SELECT ai.number, ai.sha256, ai.completed
       FROM artifactinstance ai
-      JOIN pe_confirmed pc ON pc.sha256 = ai.sha256
      WHERE ai.meta_community = '_public'
        AND ai.artifact_type  = 'FILE'
        AND ai.completed IS NOT NULL
@@ -36,6 +37,9 @@ WITH scoped AS (
        AND ai.state::text <> 'KNOWN_GOOD'
        AND ai.scan_config IS DISTINCT FROM 'feed'
        AND COALESCE(ai.actions->>'scan', ai.actions->>'_default', 'true')::boolean
+       AND ai.mimetype IN ('application/x-dosexec',
+                           'application/vnd.microsoft.portable-executable',
+                           'application/x-msdownload')   -- pre-filter; NOT the PE gate
        AND ai.completed >= :'window_start'::timestamp
 ),
 first_ever AS (

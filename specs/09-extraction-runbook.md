@@ -380,22 +380,31 @@ counts needed to band it. `π_base = 1`. It is the heavy query, it runs rarely, 
 the reproducibility unit everything else keys on.
 
 ```bash
-psql "$PSQL_URI" \
-  -c "CREATE TEMP TABLE pe_confirmed (sha256 char(64) PRIMARY KEY);" \
-  -c "\copy pe_confirmed FROM 'data/snapshots/pe_confirmed.txt'" \
-  -f pipeline/sql/02_base_pull.sql \
-  --csv -o data/base/artifacts.csv
+.venv/bin/python pipeline/01_extract.py \
+  --window-start 2026-09-08 --window-end 2026-10-01 \
+  --horizon-max-days 90 \
+  --pe-confirmed data/snapshots/pe_confirmed.txt
 ```
 
-**The temp table and the pull must share one `psql` invocation** — a temp table dies with
-its session.
+> **Why this is a Python stage and not a `psql -f`.** The replica is a **hot standby**
+> (`pg_is_in_recovery() = true`) and refuses `CREATE TEMP TABLE` outright — measured
+> 2026-10-01 on stage, and prod's reader endpoint is the same kind of thing. So the
+> confirmed-PE set cannot be joined in SQL. `01_extract.py` runs `02_base_pull.sql`
+> ungated, then applies the confirmed set **in pandas before the base is written** — so
+> the base Parquet is still exactly the confirmed-PE population and the run draw's `π` is
+> still computed over confirmed-PE band populations. `psql` remains the right tool for
+> steps 1–2, which are single read-only queries.
+
+For a stage rehearsal where the CLI pod is unreachable, `--no-pe-gate` skips the filter;
+the manifest records `pe_gate: skipped-REHEARSAL` and such a base is never trained on.
 
 **Set `horizon_max_days` from step 2's `gap_p90`**, not from the placeholder. On stage,
 natural gaps ran 92 days median for contested and 218 for consensus-clean; the bound is
 doing real work and a wrong one silently changes the population.
 
-**Produces:** `data/base/artifacts.csv` → converted to `data/base/<window>.parquet` with
-a manifest carrying the query text, window, bound, row count and **content hash**. That
+**Produces:** `data/base/<window>.parquet` with a manifest carrying the query hash,
+window, bound, PE-gate mode, row count and **content hash** — and, from the same run,
+`data/base/<window>.assertions.parquet` (step 5 happens inside the same invocation). That
 hash goes into every run manifest, which is how "which base did this model come from" is
 always answerable.
 
@@ -416,13 +425,11 @@ the PE confirmation moved the population.
 Long form, both scans, every artifact in the base. **Stream it; never materialize it in a
 client.** At 1M artifacts this is ~30M rows.
 
-```bash
-# load the (instance_number, sha256, scan_role) pairs from the base, two per artifact
-psql "$PSQL_URI" \
-  -c "CREATE TEMP TABLE base_scans (instance_number bigint, sha256 char(64), scan_role text);" \
-  -c "\copy base_scans FROM 'data/base/scans.csv'" \
-  -c "\copy (<the SELECT from 03_assertions_pull.sql>) TO 'data/base/assertions.csv' CSV HEADER"
-```
+Runs inside `01_extract.py`, immediately after the base pull — nothing to invoke
+separately. The keys cannot sit in a temp table on the hot standby, so they ride in as a
+**`bigint[]` parameter**, `5,000` instance numbers per query, and the frames are
+concatenated. At 1M artifacts that is ~400 queries, which is also how the pull streams
+rather than materializing 30M rows at once.
 
 `engine_metadata` is **projected** — `malware_family` and a short named list — never
 pulled whole. Every added field is multiplied by ~30M rows.
@@ -471,6 +478,13 @@ per-stratum `n_available` / `n_draw`.
 reported, `π ≤ 1` everywhere, row count equals the sum of `n_draw` — **and** a second run
 with the same seed and base produces a byte-identical `cohort.parquet`. If it does not,
 that is a pipeline bug and nothing downstream can be trusted until it is found.
+
+> **Rehearsed on stage 2026-10-01** against a 25-artifact base. Same seed twice: parquet
+> **byte-identical**, content hash identical. Different seed: 7 of 9 artifacts shared.
+> `POLYSCORE_COHORT_SIZE` 10 → 9 rows, 20 → 14 rows, nothing else changed. Under-fill
+> reported on three bands and back-filled on none. Five runs launched concurrently all
+> completed from one base hash into disjoint directories. The claims in §11 are measured,
+> not asserted.
 
 ---
 
@@ -595,7 +609,7 @@ rather than the whole candidate pool — which is the main reason the draw comes
 | `'_public'` returns zero rows | you filtered on `'public'`; the stored values carry leading underscores |
 | Feed rows survive the filter | `scan_config <> 'feed'` drops NULLs silently — use `IS DISTINCT FROM` |
 | The cohort is far smaller than the survey promised | the ES confirmation ran *after* the draw. It must run before, or `π_i` is computed against a population that then shrinks |
-| The draw returns nothing | the temp table and the draw were in different `psql` invocations |
+| `ReadOnlySqlTransaction: cannot execute CREATE TABLE` | you tried a temp table on the reader. It is a hot standby; keys go in as query parameters, which is what `01_extract.py` does |
 | OpenSearch query returns nothing | wrong index — it is `metadata-*`, not `artifacts7` |
 | A duration looks impossible | `created` and `completed` may be on different clocks; step 1(f) settles it |
 | Sort order looks scrambled | something ordered by `number`, which is a **random 17-digit integer**. `id` is the time-ordered column |

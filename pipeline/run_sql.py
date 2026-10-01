@@ -17,75 +17,11 @@ from __future__ import annotations
 
 import argparse
 import pathlib
-import re
 import sys
 
 import psycopg
 
-SET_RE = re.compile(r"^\s*\\set\s+(\w+)\s+(.*?)\s*$", re.MULTILINE)
-
-
-def load_dsn(env_path: pathlib.Path) -> str:
-    for line in env_path.read_text().splitlines():
-        if line.startswith("POLYSCORE_DB_URI="):
-            uri = line.split("=", 1)[1].strip()
-            return uri.replace("postgresql+psycopg://", "postgresql://")
-    raise SystemExit(f"POLYSCORE_DB_URI not found in {env_path}")
-
-
-def extract_vars(sql: str, overrides: dict[str, str]) -> tuple[str, dict[str, str]]:
-    """Pull `\\set` declarations out of the text; CLI overrides win."""
-    variables = {m.group(1): m.group(2).strip("'") for m in SET_RE.finditer(sql)}
-    variables.update(overrides)
-    return SET_RE.sub("", sql), variables
-
-
-def substitute(sql: str, variables: dict[str, str]) -> str:
-    """Apply psql's :'name' (quoted) and :name (bare) forms.
-
-    The negative lookbehind is load-bearing: without it, `state::text` would have
-    its `:text` treated as a variable reference.
-    """
-    for name, value in variables.items():
-        sql = re.sub(rf"(?<!:):'{name}'", f"'{value}'", sql)
-        sql = re.sub(rf"(?<!:):{name}\b", value, sql)
-    return sql
-
-
-def split_statements(sql: str) -> list[str]:
-    """Split on semicolons that are not inside a string literal or a comment."""
-    out, buf, in_str, in_comment = [], [], False, False
-    i = 0
-    while i < len(sql):
-        ch = sql[i]
-        if in_comment:
-            if ch == "\n":
-                in_comment = False
-            buf.append(ch)
-        elif in_str:
-            buf.append(ch)
-            if ch == "'":
-                if i + 1 < len(sql) and sql[i + 1] == "'":   # escaped quote
-                    buf.append(sql[i + 1]); i += 1
-                else:
-                    in_str = False
-        elif ch == "-" and i + 1 < len(sql) and sql[i + 1] == "-":
-            in_comment = True; buf.append(ch)
-        elif ch == "'":
-            in_str = True; buf.append(ch)
-        elif ch == ";":
-            stmt = "".join(buf).strip()
-            if stmt:
-                out.append(stmt)
-            buf = []
-        else:
-            buf.append(ch)
-        i += 1
-    tail = "".join(buf).strip()
-    if tail:
-        out.append(tail)
-    return [s for s in out if not all(l.strip().startswith("--") or not l.strip()
-                                      for l in s.splitlines())]
+from polyscore_v2.sql import dsn_from_env as load_dsn, load_sql  # shared with 01_extract
 
 
 def render(cur) -> str:
@@ -110,9 +46,7 @@ def main() -> None:
     args = ap.parse_args()
 
     overrides = dict(kv.split("=", 1) for kv in args.set)
-    raw = args.sql_file.read_text()
-    body, variables = extract_vars(raw, overrides)
-    statements = split_statements(substitute(body, variables))
+    statements, variables = load_sql(args.sql_file, overrides)
 
     if variables:
         print(f"-- variables: {variables}\n")
