@@ -1,5 +1,5 @@
 .PHONY: help setup lock lint test clean \
-        extract compose label features split baselines train calibrate evaluate all
+        extract draw compose label features split baselines train calibrate evaluate all
 
 PY := python
 
@@ -25,8 +25,11 @@ clean:  ## remove caches (never touches data/)
 	rm -rf .pytest_cache .ruff_cache
 
 # --- pipeline stages, in order ----------------------------------------------
-extract:    ## 01 pull the cohort and freeze a snapshot
+extract:    ## 01a base pull: everything eligible in the window, no sampling (rare, heavy)
 	$(PY) pipeline/01_extract.py
+
+draw:       ## 01b run draw: stratified cohort from the base, local, seeded (repeat freely)
+	$(PY) pipeline/01b_draw.py
 compose:    ## 02 print the composition table
 	$(PY) pipeline/02_compose.py
 label:      ## 03 attach the answer column
@@ -44,7 +47,7 @@ calibrate:  ## 08 fit the calibrator and the combiner
 evaluate:   ## 09 open the test set, once
 	$(PY) pipeline/09_evaluate.py
 
-all: extract compose label features split baselines train calibrate  ## everything except evaluate
+all: extract draw compose label features split baselines train calibrate  ## everything except evaluate
 	@echo
 	@echo "Deliberately stopping before 09_evaluate."
 	@echo "The test set is opened once, by hand, after model + calibrator + combiner are frozen."

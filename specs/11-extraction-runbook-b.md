@@ -155,7 +155,7 @@ disagreement rate against ES on the overlap.
 
 ## Step B3 · Draw — era × agreement
 
-A's `02_draw.sql` with two changes:
+A's two-tier shape — a base pull, then `01b_draw.py` over it — with two changes:
 
 - **Stratify on era as well as agreement**, targeting a roughly even artifact count per
   year rather than proportional representation. Recent years dominate the raw population,
@@ -169,7 +169,7 @@ permutation stays keyed by `md5(sha256 || seed)`.
 **Produces:** `data/snapshots/b_cohort.csv`, as A's with an added `era` column and `π_i`
 computed per cell.
 
-**Done when** the three checks at the foot of `02_draw.sql` pass *per cell*, and no era is
+**Done when** the three draw checks (target met or under-fill reported, `π ≤ 1`, row count equals Σ `n_draw`) pass *per cell*, and no era is
 silently absent.
 
 ---

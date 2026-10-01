@@ -37,3 +37,4 @@ than one that records being right.
 | [0007](./0007-four-labels-for-the-pilot.md) | Four labels for the pilot (reconciles §3 with 03-labels) | Accepted |
 | [0008](./0008-training-population-is-broader-than-the-reference-population.md) | The training population is broader than the reference population | Accepted |
 | [0009](./0009-a-second-estimand-for-aged-artifacts.md) | A second estimand for aged artifacts, run as a comparison | Accepted |
+| [0010](./0010-natural-rescans-for-training-forced-for-validation.md) | Natural rescans for training, forced rescans for validation; two-tier extraction | Accepted |

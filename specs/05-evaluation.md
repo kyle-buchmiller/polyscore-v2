@@ -62,6 +62,26 @@ is why the per-slice row is not optional.
 > Quote pooled AUC nowhere. If a single number is needed, it is the one computed on §1's
 > population, reweighted by `1/π_i`.
 
+## Process stability — the seed-reshuffle noise band, made operational
+
+§8 proceeds only when the model beats baseline 3 by more than the seed-reshuffle noise
+band. §11 makes that a measured number rather than a phrase:
+
+1. Run the runbook **`stability_runs` times with different seeds**, each a fresh run draw
+   from the **same base snapshot**. The base does not change; only the draw does.
+2. Evaluate every resulting model on the **one shared forced validation set**.
+3. Report the spread: of AUC, of per-artifact score (mean absolute difference, pairwise),
+   and of rank order (Spearman, pairwise). For logistic regression, coefficient
+   correlation across runs as well.
+
+That spread is the noise floor of the **process**, and it is the denominator for every
+comparison in this repo. A reported improvement smaller than it is not a result. A spread
+that is itself large is a finding about the draw — too few artifacts in a band, or a band
+whose membership is unstable — and is fixed in §9, not by picking the best seed.
+
+**Determinism is a separate check:** two runs with the **same** seed and base must produce
+byte-identical cohorts and models. Any difference is a pipeline bug.
+
 ## Three standing controls
 
 Cheap, and each catches a whole class of bug that is otherwise invisible.

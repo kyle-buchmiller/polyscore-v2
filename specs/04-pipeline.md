@@ -45,9 +45,27 @@ types and will not silently turn a hash into a number.
 
 ## Stage contracts
 
-**01 · extract.** Query Postgres for PE instances matching estimand **§10** — the
-*training* population, feeds included — inside the date window, with a deterministic
-`ORDER BY` before any limit. **Not §1**: §1 is the reference frame the calibrator is
+**01 · extract — two tiers** ([`0010`](../decisions/0010-natural-rescans-for-training-forced-for-validation.md)).
+
+*01a · base pull.* Query Postgres for every eligible PE artifact in the date window —
+estimand **§10**'s population, feeds included — **that already has a natural later scan**
+inside `[horizon_days, horizon_max_days]`, with both scans' assertions. **No sampling**:
+`π_base = 1`. Deterministic `ORDER BY` before any limit. This is the heavy query and the
+reproducibility unit; it runs rarely. `engine_metadata` is **projected** to
+`malware_family` plus a fixed short list, never pulled whole — at 1M artifacts the full
+JSONB is tens of gigabytes.
+
+*01b · run draw.* From the base Parquet, **locally**, draw `cohort_size` artifacts
+stratified per §9 with `random_seed`, recording `π_draw` per row. Never touches the
+database. Writes under `data/runs/<run_id>/`. This is what makes scaling a variable
+change, retraining quick, and concurrent runs free — and it is the only form under which
+"same base, same seed, same cohort" is a true sentence.
+
+*01c · validation tranche.* Separately and once: draw `validation_size` artifacts **blind
+to rescan history**, enqueue daily forced tranches, harvest after the horizon. The gap is
+≈30 by construction and the selection is ours. This set is never trained on.
+
+Everything below about the query applies to 01a. **Not §1**: §1 is the reference frame the calibrator is
 fitted on in stage 08, and drawing training data from it forfeits the contested band.
 Every row carries its `provenance`, which is what lets stage 08 select the §1 subset back
 out. **Draw stratified per estimand
@@ -100,6 +118,12 @@ the builder refuses anything stamped later than the scoring moment.
 **05 · split.** Sort by time, cut at the estimand's percentages, enforce the horizon
 gap, and ensure no family cluster straddles a boundary. Also write the random-split
 variant, clearly named as the optimistic one.
+
+> **The forced validation tranche is not a split of the training draw.** It is drawn
+> separately, blind to rescan history, and labelled by forced rescan — so it is the one
+> set whose selection and gap are ours. The train/validate/test split here is *within*
+> the natural-rescan draw; the forced set sits outside it and is what §8's decision and
+> §11's stability measurement are judged on.
 
 > **Split first, rebalance second — and only the training fold.** The validate and test
 > folds keep natural prevalence, reconstructed by `1/π_i` weights from §9. Rebalancing

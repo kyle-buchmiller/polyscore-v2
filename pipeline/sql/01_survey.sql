@@ -58,7 +58,7 @@ feature_scan AS (
 label_scan AS (
     -- NEAREST scan at or after the horizon, deliberately UNBOUNDED above here --
     -- the survey's job is to show how far out the tail actually goes so the
-    -- tolerance in 02_draw.sql can be set from data rather than guessed.
+    -- tolerance in 02_base_pull.sql can be set from data rather than guessed.
     SELECT DISTINCT ON (fs.sha256)
            fs.sha256,
            ai.completed AS label_moment,
@@ -139,7 +139,7 @@ SELECT stratum,
 -- The targets are a claim about where the hard cases live, made before anyone
 -- looked. If `contested` comes back at 3%, the bands move -- not the draw.
 --
--- THE GAP COLUMNS SET A PARAMETER. gap_p50/p90/max are what 02_draw.sql's
+-- THE GAP COLUMNS SET A PARAMETER. gap_p50/p90/max are what 02_base_pull.sql's
 -- horizon_max_days should be chosen from. If p90 is ~35 days, a 90-day tolerance
 -- is generous and harmless. If p90 is 200 days, most labels are not T+30 labels at
 -- all and the horizon needs rethinking before the draw -- not after.

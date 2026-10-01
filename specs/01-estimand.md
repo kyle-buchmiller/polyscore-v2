@@ -2,7 +2,7 @@
 
 ## Scope
 
-The ten decisions that define what the number means. **Frozen.** Changing any of
+The eleven decisions that define what the number means. **Frozen.** Changing any of
 them invalidates every result produced under the old version; bump the version at the
 bottom and record the change in `decisions/`.
 
@@ -149,9 +149,10 @@ Full taxonomy, the fold map and the rate denominators in
 
 **Malicious as of when?**
 
-**T+30 days** from first sighting, with a **T+180** re-check on a subsample.
+**T+30 days** from first sighting, with a **T+180** re-check on a subsample. Served by
+**two arms with different label sources** — see below.
 
-*Why.* Thirty days captures most detection accrual while still fitting inside a pilot.
+*Why 30.* Thirty days captures most detection accrual while still fitting inside a pilot.
 The 180-day re-check yields the **churn rate** — the fraction of files called benign at
 30 days that turn malicious later — which is a hard floor on the lowest score that can
 honestly be emitted, and settles whether a true zero is reachable at all.
@@ -160,37 +161,58 @@ honestly be emitted, and settles whether a true zero is reachable at all.
 so the label comes from the **nearest scan at or after it** — but "at or after" cannot mean
 *any* later scan. Detection accrual is roughly monotone, so a label taken at T+400 reflects
 an order of magnitude more accrual than one at T+31; mixing them puts two different
-measurements in one column. Worse, the spread is not random: rescan timing is user-driven,
-so a long gap correlates with how interesting somebody found the file.
+measurements in one column. What matters is **homogeneity** — that every row's label is
+the same measurement — not the integer 30. Exactly 30 is neither achievable nor required:
+even a forced rescan is enqueued, queued, and runs a bounty window before it reveals.
 
-*Exactly 30 is neither achievable nor required.* A rescan is enqueued, queued, then runs
-a bounty with its own window before it reveals, so even a forced rescan lands at T+30 plus
-hours. What matters is **homogeneity** — that every row's label is the same measurement —
-not the integer 30.
+### Two arms
 
-Two ways to schedule the forced rescan, and they differ by more than convenience:
+The label serves two purposes, and they want different things
+([`0010`](../decisions/0010-natural-rescans-for-training-forced-for-validation.md)):
 
-| Schedule | Resulting gaps |
-|---|---|
-| **One batch**, at `max(T) + 30` | `[30, 30 + window_width]` — a one-week freeze window yields 30–37 day gaps. Narrowing the window tightens the label and shrinks the cohort |
-| **Daily tranches** — each day's submissions rescanned 30 days later | **≈30 days for every row, at any cohort size.** Costs a scheduled job instead of one command, and dissolves the size-versus-homogeneity trade |
+| Arm | Label source | Gap | Selection | Size | Waits |
+|---|---|---|---|---|---|
+| **Training** | **natural rescans**, prod as-is | `[30, horizon_max_days]`, recorded per row | present — accepted and **measured** | 1M+ | none |
+| **Validation** | **forced tranche rescans** | ≈30 | none — drawn blind to rescan history | 1–2k | 30 days, once |
 
-Prefer tranches. The batch form is the fallback when a scheduled job is not available.
+**Why natural rescans can train.** The model learns `P(Y | X)` from the features at T.
+Selection that operates through things visible at T — the band, the submitter, lookup
+activity — is covariate shift, and conditioning on the features handles it. The dangerous
+case is selection on *outcome given features*: someone rescanned because they already knew
+it was bad in a way the T-features do not show. That cannot be reweighted away, because it
+cannot be seen. It can only be **bounded empirically**, which is the validation arm's job.
 
-*The deeper reason forcing beats waiting.* A forced rescan does not remove variance — it
-removes **correlated** variance. Natural gaps are set by when somebody chose to look at the
-file again, which correlates with how interesting it is, and therefore with the outcome.
+**Why validation must be forced.** A forced rescan does not remove variance — it removes
+**correlated** variance. Natural gaps are set by when somebody chose to look at a file
+again, which correlates with how interesting it is, and therefore with the outcome.
 Scheduled gaps are set by us and correlate with nothing about the artifact. A ±7-day spread
-we created is harmless; a ±7-day spread that selected on interest is not.
+we created is harmless; a ±7-day spread that selected on interest is not. So the one place
+the label must be unselected and homogeneous — the set we judge the model on — is the one
+place we still force.
 
-So the pipeline **records the realized gap per row** and bounds it above. The bound is a
-parameter (`horizon_max_days`), set from the gap distribution stage 02 reports rather than
-guessed — and if gaps turn out to be systematically longer for contested artifacts than for
-consensus ones, the heterogeneity is correlated with difficulty, which is the worst
-available shape for it and a reason to stop.
+Schedule the validation rescans as **daily tranches**, each day's submissions rescanned 30
+days later: ≈30-day gaps for every row at any size. The one-batch form at `max(T) + 30`
+yields gaps spanning the freeze window and is the fallback when a scheduled job is not
+available.
 
-This is also why the T+180 re-check is a **separate** measurement rather than a wider
-window: churn is the thing being measured, so it cannot also be absorbed into the label.
+**What the two arms are honestly measuring.** Training is "state at T+[30, bound]";
+validation is "state at ≈T+30". If performance holds across both, the heterogeneity and
+the selection were benign. If it does not, that gap *is* the finding — and it was found on
+two thousand artifacts and one 30-day wait, not in production.
+
+### The bound, and the diagnostic it needs
+
+The pipeline **records the realized gap per row** and bounds it above with
+`horizon_max_days`. The bound is set from the gap distribution stage 02 reports, not
+guessed — measured on stage, natural gaps ran 92 days median for contested artifacts and
+218 for consensus-clean, so the bound is doing real work. And if gaps are systematically
+longer for contested artifacts than consensus ones, the heterogeneity is correlated with
+difficulty — the worst available shape for it, and a reason to stop.
+
+The T+180 re-check is a **separate** measurement rather than a wider window: churn is the
+thing being measured, so it cannot also be absorbed into the label. It is computed over
+**engines present at both moments only** — an engine that merely showed up late is not a
+revised opinion ([`03-labels.md`](./03-labels.md)).
 
 > **This horizon is what constrains A to recent artifacts**, and it is not repairable by
 > choosing a different T. An artifact first seen five years ago, rescanned today, yields a
@@ -202,9 +224,9 @@ window: churn is the thing being measured, so it cannot also be absorbed into th
 > not as a replacement. A's churn rate is what should set B's convergence parameters, so
 > **A runs first.**
 
-*Practical note.* A T+30 label only exists for files actually rescanned around then,
-and rescans are user-driven and therefore non-random. Freeze the cohort, bulk-enqueue
-its rescans (`ai instance rescan <start> <end>`), and harvest labels after the horizon.
+*Practical note.* The training arm needs no rescan — it draws from scans that already
+happened. The validation arm uses `ai instance rescan <start> <end>` with start/end as
+**timestamps**, one tranche per day, and harvests after the horizon.
 
 ## 5 · Split policy
 
@@ -417,7 +439,64 @@ the number *claims*, which was the whole objection to a store-wide reference pop
 
 ---
 
-**Estimand version:** `4` · frozen 2026-09-24 · unsigned
+## 11 · Scale and reproducibility
+
+**How big, how often, and how do we know two runs are the same?**
+
+**Cohort size is an environment variable. Extraction is two-tier. Every run is isolated
+and comparable.** ([`0010`](../decisions/0010-natural-rescans-for-training-forced-for-validation.md))
+
+### Two tiers
+
+| Tier | What | Sampling | Cost | Frequency |
+|---|---|---|---|---|
+| **Base pull** | every eligible artifact in a date window, with its natural label scan and both scans' assertions | **none** — `π_base = 1` | one heavy query on the replica | rare; this is the reproducibility unit |
+| **Run draw** | a §9-stratified cohort of `POLYSCORE_COHORT_SIZE` artifacts, drawn **locally** from the base Parquet with `POLYSCORE_RANDOM_SEED` | `π_run = π_draw`, recorded | seconds, no database | as often as wanted, **concurrently** |
+
+The split is what makes the requirements true at once. Scaling from 10k to 1M is a change
+to one variable, because the base already holds everything and the draw just takes more
+of it. Retraining is quick because it never touches the database. Concurrent runs are free
+because they read one immutable file. And "same runbook, same seed, same model" is only a
+true sentence when the thing being sampled is a file that does not change — the database
+returns different rows tomorrow.
+
+### Isolation
+
+Every artifact a run produces lives under `data/runs/<run_id>/`. The manifest carries the
+**base snapshot's content hash**, the seed, the cohort size, the estimand version, and the
+resolved `horizon_max_days`. Two runs that share a base and a seed must produce
+**byte-identical** files; the manifest is how that is checked, and a mismatch is a bug in
+the pipeline, never in the data.
+
+### Process stability
+
+§8 proceeds only when the model beats baseline 3 "by more than the seed-reshuffle noise
+band". That band is now an operational number: run the runbook **N times with different
+seeds**, evaluate every model on the one shared validation set, and report the spread —
+of AUC, of per-artifact score, of rank order. That spread is the noise floor of the
+*process*. A reported improvement smaller than it is not a result.
+
+Two runs with the **same** seed are the determinism check and must agree exactly.
+
+### What scale does not buy
+
+**A million grade-1 labels are not a hundred times better than ten thousand.** Volume
+tightens intervals, fills the contested band, and makes per-type and per-era splits
+possible. It does not move the calibration wall, which is a property of label *grade* and
+still waits on R3. Scale is worth having and must not be mistaken for progress on the thing
+that actually limits the model.
+
+### Two things that break at a million
+
+`engine_metadata` is JSONB and can run to kilobytes per row; 30M assertion rows of it is
+tens of gigabytes. The snapshot carries a **fixed projection** — `malware_family` and a
+short named list — never the document. And 30M rows is past what pandas handles
+comfortably: stage 04 pivots with arrow in artifact-keyed chunks rather than loading the
+matrix whole.
+
+---
+
+**Estimand version:** `5` · frozen 2026-10-01 · unsigned
 
 | Version | Change |
 |---|---|
@@ -425,9 +504,10 @@ the number *claims*, which was the whole objection to a store-wide reference pop
 | 2 (2026-09-24) | §9 sampling design; per-artifact counting rule in §1 — [`0006`](../decisions/0006-stratified-sampling-with-recorded-inclusion-probabilities.md) |
 | 3 (2026-09-24) | §3 collapsed to four labels for the pilot — [`0007`](../decisions/0007-four-labels-for-the-pilot.md) |
 | 4 (2026-09-24) | §10 training population, separated from §1's reference population — [`0008`](../decisions/0008-training-population-is-broader-than-the-reference-population.md) |
+| 5 (2026-10-01) | §4 split into a natural-rescan training arm and a forced validation arm; §11 scale and reproducibility — [`0010`](../decisions/0010-natural-rescans-for-training-forced-for-validation.md) |
 
 **No results have been produced under any version**, so no version bump here has
 invalidated anything. That stops being true the moment stage 09 runs once.
 
-Record the signatory here when agreed. Any change to §1–§10 requires a version bump and
+Record the signatory here when agreed. Any change to §1–§11 requires a version bump and
 a record in `decisions/`.

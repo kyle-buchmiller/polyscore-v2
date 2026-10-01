@@ -5,6 +5,13 @@
 How to actually run stage 01 against production from a workstation: what to
 authenticate, what to run, in what order, and what each step should return.
 
+Extraction is **two-tier** ([`0010`](../decisions/0010-natural-rescans-for-training-forced-for-validation.md)):
+one **base pull** of everything eligible in a window, then any number of **run draws**
+from that base — locally, seeded, sized by `POLYSCORE_COHORT_SIZE`. Scaling from 10k to
+1M+ is a change to that one variable. Retraining never touches the database. Runs are
+isolated under `data/runs/<run_id>/` and may run concurrently. A separate, small
+**forced-rescan validation set** is the one thing that still waits on prod.
+
 ## Invariants
 
 - **Read-only throughout.** Nothing in this runbook writes to production.
@@ -25,9 +32,9 @@ two moments in its life and the engine evidence at each.
 |---|---|---|
 | **Artifact identity** | `sha256`, deduped | §1 counts per artifact, never per scoring event — a file a thousand customers look up counts once |
 | **The feature scan (T)** | one `artifactinstance` row | §2 fixes the scoring moment at bounty reveal; every feature must be true at or before it |
-| **The label scan (T+30)** | a second `artifactinstance` row, ≥30 days later | §4's horizon. This separation is the whole point — see below |
+| **The label scan** | a second `artifactinstance` row — a **natural** rescan inside `[30, horizon_max_days]` for training; a **forced** one at ≈30 for validation | §4's two arms. This separation is the whole point — see below |
 | **Engine assertions at each scan** | one row per engine: `author`, `verdict`, `engine_metadata`, `bid` | **the entire feature space** |
-| **Sampling bookkeeping** | `stratum`, `pi`, `provenance` | §9. `pi` is the one column no later step can reconstruct |
+| **Sampling bookkeeping** | `stratum`, `pi`, `provenance`, `label_gap` | §9. `pi` is the one column no later step can reconstruct; `label_gap` is what makes the training arm's heterogeneity visible |
 | **PE static features** | ~120 columns from psstorage | stage 04, not here — see *What to expect when downloading* |
 
 ### Why *these* rows and not others
@@ -62,7 +69,7 @@ population, the moment and the draw: [`01-estimand.md`](./01-estimand.md) §1, �
 
 ---
 
-## Why this is five steps and not one command
+## Why this is eight steps and not one command
 
 Every instinct says "just export it." Four things make that impossible here, and each one
 independently forces a step.
@@ -131,6 +138,13 @@ that surprises people**, because two steps here need verbs that are *not* read-o
 terms: `kubectl exec` is `create` on `pods/exec`, and `port-forward` is `create` on
 `pods/portforward`. Neither is included in the standard `view` ClusterRole. An IAM role named
 "ReadOnly" mapped to `view` would let you list pods and block every step below.
+
+> **Measured 2026-09-29: `ReadOnlyProd` has no EKS access entry on `prod-v3` at all.**
+> Not a `view` mapping that blocks `exec` — no mapping. The token mints, the cluster
+> rejects it, and every step below fails at the first `kubectl`. `AdminProd` is mapped,
+> and so is stage's `AdminNonProd`. Resolving this is an infra change — an access entry
+> for `ReadOnlyProd` bound to a custom role granting exactly the verbs below — and the
+> stock `AmazonEKSViewPolicy` will not do it. Until then, stage is the rehearsal target.
 
 Check all four in one go before starting:
 
@@ -246,7 +260,7 @@ psql "$PSQL_URI" -f pipeline/sql/00_verify.sql | tee data/reports/verify.txt
 ```
 
 It is an input to *decisions*, not to code: its answers get hand-carried into the filters in
-`01_survey.sql` / `02_draw.sql` and, where they change one, into `decisions/`.
+`01_survey.sql` / `02_base_pull.sql` and, where they change one, into `decisions/`.
 
 **Done when** all six returned and none surprised you. A surprise is a stop, not a note.
 
@@ -358,54 +372,132 @@ does not match the SQL window.
 
 ---
 
-## Step 4 · Draw — `pipeline/sql/02_draw.sql`
+## Step 4 · Base pull — `pipeline/sql/02_base_pull.sql`  *(tier one)*
 
-Load the confirmed set into a temp table **in the same session** as the draw, then run it:
+**No sampling happens here.** This pulls **every** eligible artifact in the window that
+already has a natural later scan inside `[horizon_days, horizon_max_days]`, with the
+counts needed to band it. `π_base = 1`. It is the heavy query, it runs rarely, and it is
+the reproducibility unit everything else keys on.
 
 ```bash
 psql "$PSQL_URI" \
   -c "CREATE TEMP TABLE pe_confirmed (sha256 char(64) PRIMARY KEY);" \
   -c "\copy pe_confirmed FROM 'data/snapshots/pe_confirmed.txt'" \
-  -f pipeline/sql/02_draw.sql \
-  --csv -o data/snapshots/cohort.csv
+  -f pipeline/sql/02_base_pull.sql \
+  --csv -o data/base/artifacts.csv
 ```
 
-**The temp table and the draw must share one `psql` invocation** — a temp table dies with
-its session, and a second invocation silently gets an empty one, which would draw from
-nothing.
+**The temp table and the pull must share one `psql` invocation** — a temp table dies with
+its session.
 
-**Expect:** ~10,000 rows, seconds once the survey has warmed the same joins.
+**Set `horizon_max_days` from step 2's `gap_p90`**, not from the placeholder. On stage,
+natural gaps ran 92 days median for contested and 218 for consensus-clean; the bound is
+doing real work and a wrong one silently changes the population.
 
-**Check three things before using the output**, per the notes at the foot of the SQL:
-
-- `n_draw = ceil(cohort_size × share)` for every band. Where `n_draw = n_available`
-  instead, that band **under-filled** — report the shortfall, never back-fill from a
-  neighbour.
-- `pi ≤ 1.0` everywhere. `pi = 1.0` means a band was taken whole: legitimate, but that
-  band carries no sampling variance.
-- Row count equals the sum of `n_draw`. A mismatch means a join fanned out.
-
-**Produces:** `data/snapshots/cohort.csv` — one row per drawn artifact, ~10,000 rows.
+**Produces:** `data/base/artifacts.csv` → converted to `data/base/<window>.parquet` with
+a manifest carrying the query text, window, bound, row count and **content hash**. That
+hash goes into every run manifest, which is how "which base did this model come from" is
+always answerable.
 
 | Column | Note |
 |---|---|
-| `sha256` | the artifact |
-| `instance_number` | the **feature** scan (T) — join assertions on this |
-| `scoring_moment` | T; every feature must be true at or before it |
-| `label_instance_number`, `label_moment` | the **label** scan (T+30) |
-| `label_gap` | realized T→label interval. **Check its spread** — T+30 is a target with a tolerance, not a floor |
-| `stratum` | §9 band |
-| `n_definite`, `n_malicious` | the inputs to `m`, kept so the band is auditable |
-| **`pi`** | **inclusion probability — the irreplaceable column** |
-| `provenance` | `organic` here; the injection arm is added separately |
-| `n_available`, `n_draw` | per-band, carried so under-fill is visible in the file itself |
+| `sha256`, `instance_number`, `scoring_moment` | the feature scan (T) |
+| `label_instance_number`, `label_moment`, `label_gap` | the natural label scan |
+| `n_definite`, `n_malicious`, `n_responded` | **the band inputs** — stratum is computed at draw time, not here, so band edges can be revised without a re-pull |
+| `provenance` | `organic` |
 
-**Done when** the three checks at the foot of `02_draw.sql` pass: `n_draw` matches the
-target for every band, `pi ≤ 1.0` everywhere, and the row count equals the sum of `n_draw`.
+**Done when** the row count agrees with step 2's `labellable`. A gap means the bound or
+the PE confirmation moved the population.
 
 ---
 
-## Step 5 · Freeze the snapshot
+## Step 5 · Assertions pull — `pipeline/sql/03_assertions_pull.sql`
+
+Long form, both scans, every artifact in the base. **Stream it; never materialize it in a
+client.** At 1M artifacts this is ~30M rows.
+
+```bash
+# load the (instance_number, sha256, scan_role) pairs from the base, two per artifact
+psql "$PSQL_URI" \
+  -c "CREATE TEMP TABLE base_scans (instance_number bigint, sha256 char(64), scan_role text);" \
+  -c "\copy base_scans FROM 'data/base/scans.csv'" \
+  -c "\copy (<the SELECT from 03_assertions_pull.sql>) TO 'data/base/assertions.csv' CSV HEADER"
+```
+
+`engine_metadata` is **projected** — `malware_family` and a short named list — never
+pulled whole. Every added field is multiplied by ~30M rows.
+
+**Produces:** `data/base/assertions.parquet` — one row per `(sha256, scan_role, author)`.
+The 4th engine state (never responded) is the *absence* of a row and is reconstructed in
+stage 04 against the roster at T.
+
+**Done when** the distinct `instance_number` count equals twice the base's artifact count.
+
+---
+
+## Step 6 · Run draw — `pipeline/01b_draw.py`  *(tier two — this is what you repeat)*
+
+```bash
+POLYSCORE_RUN_ID=run-01 POLYSCORE_RANDOM_SEED=20260922 POLYSCORE_COHORT_SIZE=10000 \
+  .venv/bin/python pipeline/01b_draw.py
+```
+
+**Never touches the database.** Reads the base Parquet, computes each artifact's stratum
+from `n_malicious / n_definite` using the band edges in config, draws `cohort_size`
+stratified per §9 with the seed, records `π = n_draw / n_available` per row, writes under
+`data/runs/<run_id>/`.
+
+**To scale to 1M, change `POLYSCORE_COHORT_SIZE`.** Nothing else. The base already holds
+everything; the draw just takes more of it — and reports per-stratum under-fill if a band
+cannot supply its share, never back-filling from a neighbour.
+
+**To run several at once:**
+
+```bash
+for s in 1 2 3 4 5; do
+  POLYSCORE_RUN_ID=stab-$s POLYSCORE_RANDOM_SEED=$s .venv/bin/python pipeline/01b_draw.py &
+done; wait
+```
+
+They read one immutable file and write to disjoint directories. This is the input to the
+process-stability measurement in [`05-evaluation.md`](./05-evaluation.md): same base,
+different seeds, how far apart do the models land?
+
+**Produces:** `data/runs/<run_id>/cohort.parquet` + `manifest.json`. The manifest carries
+the base hash, seed, cohort size, estimand version, band edges, `horizon_max_days`, and
+per-stratum `n_available` / `n_draw`.
+
+**Done when** the three checks hold — `n_draw` matches target per band or under-fill is
+reported, `π ≤ 1` everywhere, row count equals the sum of `n_draw` — **and** a second run
+with the same seed and base produces a byte-identical `cohort.parquet`. If it does not,
+that is a pipeline bug and nothing downstream can be trusted until it is found.
+
+---
+
+## Step 7 · Validation tranche — the one thing that still waits on prod
+
+Draw `validation_size` artifacts (~2k) from the window **blind to rescan history** — not
+from the base, which by construction contains only artifacts someone already rescanned.
+Enqueue a forced rescan for each day's submissions 30 days after that day:
+
+```bash
+# one tranche per day; start/end are TIMESTAMPS, not ids
+kubectl --context us-prod -n ai exec deploy/artifact-index-cli-terminal -- \
+  ai instance rescan '2026-09-08 00:00' '2026-09-09 00:00' -c 50
+```
+
+Harvest after the horizon. The gap is ≈30 by construction and the selection is ours.
+
+**This set is never trained on.** It is what §8's decision and §11's stability spread are
+judged against — the one place the label is unselected and homogeneous. It waits 30 days
+**once**, and 2k rescans is a trivial load.
+
+**Produces:** `data/validation/<window>.parquet`, same shape as a run cohort, `provenance
+= forced`.
+
+---
+
+## Step 8 · Freeze the run snapshot
 
 ```bash
 make extract     # 01_extract.py: cohort + assertions -> parquet + manifest
@@ -415,8 +507,9 @@ From here the **snapshot, not the query, is the unit of reproducibility.** Re-ru
 query next week returns different rows and silently invalidates every downstream stage.
 The manifest records the query, the window, the seed, the row count and a content hash.
 
-**Produces:** `data/snapshots/<run>.parquet` + `<run>.manifest.json` — **the unit of
-reproducibility from here on.**
+**Produces:** `data/runs/<run_id>/snapshot.parquet` + `manifest.json` — the cohort joined
+to its assertions, isolated per run. **The base is the unit of reproducibility; the run
+snapshot is what a model is trained on.**
 
 The Parquet is **long, not wide**: one row per `(sha256, instance_number, author)`, so ~20–30
 rows per artifact per scan and two scans per artifact. Stage 04 pivots it to the wide feature
@@ -451,7 +544,20 @@ version and a content hash — everything needed to prove a later result came fr
 | Assertions at T+30 | same again | |
 | **Stage 01 total** | **~400–600k rows** | **~100 MB raw, far less as Parquet** |
 
-**Stage 01 is small and fast.** The expensive fetch is deliberately *not* here.
+**At 10k, stage 01 is small and fast.** The expensive fetch is deliberately *not* here.
+
+**At 1M**, the base pull is the heavy step and it runs once:
+
+| | 10k | 1M |
+|---|---|---|
+| base artifacts | — | ~1M rows, trivial |
+| assertions | ~400–600k rows | **~30M rows**, ~1–2 GB as Parquet with the projection |
+| run draw | seconds | seconds — it is a local stratified sample |
+| pivot (stage 04) | pandas is fine | **arrow in artifact-keyed chunks**; do not load the matrix whole |
+
+The base pull at 1M is a heavy query on a shared replica. It runs rarely, and everything
+"repeated, quick, concurrent" happens over the Parquet it produces — that is the whole
+reason for the two tiers.
 
 **The slow part comes later, at stage 04.** PE static features live in psstorage, not
 Postgres, because in us-prod anything over **2000 bytes** goes out-of-line and a parsed-PE
@@ -493,6 +599,11 @@ rather than the whole candidate pool — which is the main reason the draw comes
 | OpenSearch query returns nothing | wrong index — it is `metadata-*`, not `artifacts7` |
 | A duration looks impossible | `created` and `completed` may be on different clocks; step 1(f) settles it |
 | Sort order looks scrambled | something ordered by `number`, which is a **random 17-digit integer**. `id` is the time-ordered column |
+| Two runs with the same seed differ | a pipeline bug — the draw consulted something other than the base and the seed. Nothing downstream is trustworthy until found |
+| A run's cohort is smaller than `cohort_size` | a band under-filled. Correct behaviour; read the manifest's per-stratum report and do not back-fill |
+| Stage 04 runs out of memory | the matrix was loaded whole. At 1M it must be pivoted in artifact-keyed chunks |
+| The base is huge and slow to pull | expected at 1M; it runs once. If it is being re-pulled per run, the two tiers have been collapsed and concurrency and reproducibility are both gone |
+| Validation AUC far below held-out training AUC | the natural rescans were selected on something the T-features do not carry. This is the finding the validation set exists to produce |
 
 ---
 

@@ -24,7 +24,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #: carries it), excluded into the stage-01 cohort filter. See decisions/0007.
 #: 3 -> 4 (2026-09-24): SS10 training population separated from SS1's reference
 #: population -- train on the whole store, calibrate on SS1 only. See decisions/0008.
-ESTIMAND_VERSION = 4
+#: 4 -> 5 (2026-10-01): SS4 split into a natural-rescan training arm and a forced
+#: validation arm; SS11 scale and reproducibility (two-tier extraction, run isolation,
+#: process stability). See decisions/0010.
+ESTIMAND_VERSION = 5
 
 #: --- estimand SS9: sampling design -------------------------------------------
 #: Target share of the draw per stratum, keyed by the name stage 01 writes into the
@@ -99,6 +102,30 @@ class Settings(BaseSettings):
     # --- estimand SS4: horizon ----------------------------------------------
     horizon_days: int = 30
     churn_recheck_days: int = 180
+    #: Upper bound on the TRAINING arm's natural label gap. T+30 is a target, not a
+    #: floor: a label at T+400 carries an order of magnitude more accrual than one at
+    #: T+31. Set from the gap distribution stage 02 reports; 90 is the placeholder.
+    #: The VALIDATION arm is forced to ~30 and does not use this. See decisions/0010.
+    horizon_max_days: int = 90
+
+    # --- estimand SS11: scale and reproducibility ---------------------------
+    #: THE scaling knob. 10k for the pilot; 1M+ is the same pipeline with this changed.
+    #: A run draw takes this many artifacts from the base snapshot, stratified per SS9.
+    cohort_size: int = 10_000
+    #: Which base snapshot a run draws from. A run never touches the database -- that
+    #: is what makes it quick, concurrent, and reproducible. Set to the base's path.
+    base_snapshot: Path | None = None
+    #: Isolates every artifact a run writes under data/runs/<run_id>/. Two runs with
+    #: the same base and seed must produce byte-identical files; this is how that is
+    #: checked rather than assumed.
+    run_id: str = "default"
+    #: How many seeds the process-stability measurement runs. Their disagreement on the
+    #: shared validation set is the noise floor a reported improvement must clear (SS8).
+    stability_runs: int = 5
+    #: Size of the forced-rescan VALIDATION arm. Small on purpose: it answers one
+    #: question -- does a model trained on selected natural rescans hold on unselected
+    #: forced ones -- and waits 30 days once.
+    validation_size: int = 2_000
 
     # --- estimand SS5: split ------------------------------------------------
     train_frac: float = 0.60
