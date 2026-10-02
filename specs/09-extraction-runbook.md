@@ -109,13 +109,71 @@ subnets, OpenSearch is a `vpc-…` endpoint, ClickHouse is a ClusterIP service. 
 **no bastion, no developer VPN, and no `psql` wrapper.** (`charts/charts/vpn-concentrator`
 is a Mullvad *egress* concentrator for sandbox detonation — not developer ingress.)
 
-There are exactly three doors, and two of them are `kubectl`:
+There are exactly three doors, and only two of them are `kubectl` — and the third turns
+out to matter more than it first looked:
 
 | Door | Use it for |
 |---|---|
 | `kubectl port-forward` to an in-cluster service | **Postgres** (via the pooler) and ClickHouse — lets you run local `.sql` files |
 | `kubectl exec` into `artifact-index-cli-terminal` | **OpenSearch** and **psstorage** — the pod already holds the endpoints, credentials and the app's own clients |
-| `kibana.polyswarm.network` | ad-hoc OpenSearch browsing, if you have a `polyswarm_ro` user |
+| **`kibana.polyswarm.network`** — the OpenSearch REST API behind Cloudflare Access | the **PE gate** (step 3) and the **PE static features** (stage 04), **with no `kubectl` at all** — see *The OpenSearch door* below |
+
+### The OpenSearch door
+
+**Measured 2026-10-02.** Every path on `kibana.polyswarm.network` — `/_dashboards/`,
+`/_cat/indices`, `/metadata-*/_count`, `/_cluster/health` — returns a **302 to Cloudflare
+Access login**, not a 404. So the tunnel routes the **whole OpenSearch domain**, and the
+only thing in front of it is an Access policy that a Kibana login already passes. The
+app's own metadata names the scripted path: `cloudflared access curl`.
+
+That changes what needs the CLI pod. Two things live in OpenSearch that this runbook
+needs, and both are **time-invariant** facts about a file's bytes — the only kind ES is
+safe for:
+
+| Need | Where in ES | Replaces |
+|---|---|---|
+| **PE gate** — `exists: pefile.imphash` | `metadata-*` | step 3's `kubectl exec` |
+| **PE static features** — 35 `pefile.*` + 14 `lief.*` fields, read from the index mapping | `metadata-*` | stage 04's ~10k psstorage blob fetches, **for A's window** |
+
+```bash
+# one-time: install the Access CLI (a user-bin tool; the tracked route is sam.yaml binaries:)
+curl -sSL -o ~/.local/bin/cloudflared \
+  https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64
+chmod +x ~/.local/bin/cloudflared
+
+# one-time per session: browser SSO, then a cached token
+cloudflared access login https://kibana.polyswarm.network
+export CF_ACCESS_TOKEN=$(cloudflared access token -app https://kibana.polyswarm.network)
+
+# the first test — a single count, no scroll
+curl -sS -H "cf-access-token: $CF_ACCESS_TOKEN" -u "$ES_USER:$ES_PASS" \
+  "https://kibana.polyswarm.network/metadata-*/_count" \
+  -H 'Content-Type: application/json' -d '{"query":{"exists":{"field":"pefile.imphash"}}}'
+```
+
+> **The one layer not yet verified** is what sits *behind* Access. `artifact-index`
+> authenticates to this domain with HTTP Basic, and the wiki describes Kibana admins
+> creating **internal users mapped to the `polyswarm_ro` role**. If the domain's security
+> plugin wants that second login, `-u` carries it; if Access alone suffices, drop it. The
+> `_count` call above settles which in one request, and it is read-only either way.
+
+**What this door does not open:** Postgres. Steps 1, 2, 4 and 5 still ride the
+`pgpool` port-forward, which still needs an EKS access entry for `ReadOnlyProd`. The
+blocker narrows to exactly that one thing.
+
+**Try it by hand first, in Discover.** Index pattern `metadata-*` (or the alias
+`artifacts`), and this DQL gives step 3's count without writing a line:
+
+```
+meta_community:"_public" and pefile.imphash:* and scan.first_seen >= "2026-09-08" and scan.first_seen < "2026-10-01"
+```
+
+That number is the first real prod figure this project can produce today, with no
+infrastructure change at all.
+
+Coverage caveat: before September 2026 the index was ~37% populated and biased toward
+successfully-analysed files. For **A's window** that is moot. For **Estimand B**, ES
+cannot be the feature source for pre-September artifacts — those still need psstorage.
 
 ---
 
@@ -160,10 +218,10 @@ kubectl --context us-prod auth can-i create pods/portforward -n ai       # Stage
 | 0 · `.env` | SSO session, prod account | `get secrets` in `ai` | — (this *reads* the credential) |
 | 1 · Verify | ” | `create pods/portforward` in `pgpool` | Postgres user from `DB_URI_RO` |
 | 2 · Survey | ” | same | same |
-| 3 · PE confirm | ” | `create pods/exec` in `ai` | OpenSearch basic auth — **already in the pod env**, you never handle it |
+| 3 · PE confirm | **none** (via the OpenSearch door) | **none** | Cloudflare Access (your SSO, via `cloudflared`) + possibly an OpenSearch internal user. Fallback: `create pods/exec` in `ai` |
 | 4 · Draw | ” | `create pods/portforward` in `pgpool` | Postgres user from `DB_URI_RO` |
 | 5 · Snapshot | — | — | local only |
-| *(stage 04)* | ” | `create pods/exec` **or** `portforward` in `ai` | **none** — psstorage file GET is unauthenticated |
+| *(stage 04)* | none for A's window | none — PE features come from the OpenSearch door | psstorage (unauthenticated GET) only for pre-September artifacts, i.e. Estimand B |
 
 **No PolySwarm API key is needed for any read step.** One appears only if labels have to be
 manufactured prospectively: `ai instance rescan` re-POSTs through the public API using the
@@ -319,9 +377,21 @@ indices are `metadata-<index_id>` where `index_id` is the number of whole weeks 
 Unix epoch of the artifact's `first_seen` (`floor(epoch / 604800)`). Every read path in
 `artifact-index` queries the wildcard, and so should we.
 
-OpenSearch is an AWS-managed VPC endpoint rather than a k8s Service, so `port-forward` does
-not reach it. Run from the CLI pod, which already holds the endpoint and basic-auth
-credentials:
+**Preferred: through the OpenSearch door, no `kubectl`.** After the one-time
+`cloudflared access login` above:
+
+```bash
+.venv/bin/python pipeline/03_pe_confirm.py --window-start 2026-09-08 --window-end 2026-10-01 --count-only
+.venv/bin/python pipeline/03_pe_confirm.py --window-start 2026-09-08 --window-end 2026-10-01 \
+    > data/snapshots/pe_confirmed.txt
+```
+
+`--count-only` is the first thing to run: one `_count` request that also settles whether
+an internal user is needed behind Access.
+
+**Fallback: from the CLI pod**, if the door is ever closed. OpenSearch is an AWS-managed
+VPC endpoint rather than a k8s Service, so `port-forward` does not reach it; the pod
+already holds the endpoint and basic-auth credentials:
 
 ```bash
 kubectl --context us-prod -n ai exec -i deploy/artifact-index-cli-terminal -- \
@@ -573,9 +643,14 @@ The base pull at 1M is a heavy query on a shared replica. It runs rarely, and ev
 "repeated, quick, concurrent" happens over the Parquet it produces — that is the whole
 reason for the two tiers.
 
-**The slow part comes later, at stage 04.** PE static features live in psstorage, not
-Postgres, because in us-prod anything over **2000 bytes** goes out-of-line and a parsed-PE
-document is far larger. So stage 04 makes ~10,000 blob fetches:
+**The slow part was going to be stage 04 — and for A it may not exist.** The PE static
+block — 35 `pefile.*` and 14 `lief.*` fields — is **indexed in OpenSearch** and reachable
+through the OpenSearch door in bulk, time-invariant and therefore safe to take from ES.
+For A's window that replaces the blob fetch entirely.
+
+The psstorage path remains for **pre-September artifacts** (Estimand B), where ES coverage
+is ~37% and biased. There, in us-prod anything over **2000 bytes** goes out-of-line and a
+parsed-PE document is far larger, so stage 04 makes one blob fetch per artifact:
 
 ```
 ps://artifact-index/metadata/<136 hex chars>        # sha256 + sha1 + md5 concatenated
@@ -627,8 +702,9 @@ These are operational facts nobody has recorded, and each blocks something speci
 
 - **ClickHouse `hash_searches` retention.** No `TTL` in the migration, so how far back the
   lookup data goes is unknown. Gates F11.
-- **Whether `kibana.polyswarm.network` proxies the full REST API** or only `_dashboards/`.
-  The tunnel route is configured in the Cloudflare dashboard, not in `charts`. Verify with
-  one `GET /` before depending on it.
+- ~~Whether `kibana.polyswarm.network` proxies the full REST API~~ — **settled 2026-10-02:
+  it does.** Every REST path returns a 302 to Cloudflare Access, not a 404. What is still
+  unverified is the layer behind Access — whether the domain's security plugin wants an
+  OpenSearch internal user on top. One `_count` request settles it.
 - **The exact pgdog and ClickHouse Service names** — both charts are external or
   operator-rendered. `kubectl get svc` settles each in one command.

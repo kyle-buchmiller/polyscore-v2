@@ -112,6 +112,10 @@ size. The per-stratum split is the cheap check that labelling tracks difficulty 
 `undecidable` spread evenly across bands means the rule is wrong.
 
 **04 · features.** Build the ~120 numeric columns from [`02-data.md`](./02-data.md).
+The engine-verdict columns pivot from the base's assertions Parquet. The PE static block
+comes **from OpenSearch in bulk** for artifacts in the post-September index — it is
+time-invariant and fully indexed there, which removes the per-artifact psstorage fetch
+for A entirely — and from psstorage only for pre-September artifacts (Estimand B).
 **The as-of rule is enforced here**, mechanically — every field carries a timestamp and
 the builder refuses anything stamped later than the scoring moment.
 

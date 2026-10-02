@@ -44,6 +44,21 @@ a different product.
 > it cannot express the feed filter, while Postgres cannot cheaply express the PE filter.
 > **Cohort selection needs both stores**: Postgres for the filters and all history, ES for
 > PE confirmation.
+>
+> **The same argument admits one more thing from ES: the PE static block itself.** The
+> index mapping carries 35 `pefile.*` fields (imphash, sections with entropy, the full
+> certificate object, imports, libraries, exports, every ASLR/DEP/CFG/SEH flag, rich-header
+> hash, pdb, compile date) and 14 `lief.*` fields (authentihash, signatures, signer,
+> signing time, verification). Those are properties of the **bytes**, which do not change,
+> so the overwritten-on-rescan document cannot drift on them. For artifacts in the
+> post-September index, stage 04 reads them from ES in bulk — through the Cloudflare-Access
+> door in [`09-extraction-runbook.md`](./09-extraction-runbook.md) — instead of one
+> psstorage blob fetch per artifact. Two caveats: `pefile.is_valid` and `is_suspicious` are
+> in the mapping but **written by nothing** (do not use them), and pre-September coverage
+> is ~37% and biased, so Estimand B still takes features from psstorage.
+>
+> Also indexed and reachable the same way, relevant later: `known_good` (R9's catalogue),
+> `cape_sandbox_v2` and `triage_sandbox_v0` (the sandbox signals in `06-signals.md`).
 
 ### Schema facts that are easy to get wrong
 
