@@ -1,9 +1,11 @@
 -- 01 · Survey — counts and the band histogram. NO DRAW HAPPENS HERE.
 --
--- This is the decision point. It answers two questions that can invalidate the
+-- This is the decision point. It answers three questions that can invalidate the
 -- plan before a single row is downloaded:
---   1. Does the SS1 population actually contain ~10,000 usable artifacts?
+--   1. Does the SS10 population (feeds IN) hold enough labellable artifacts?
 --   2. Do the SS9 bands populate anywhere near their target shares?
+--   3. How much of it is the SS1 reference subset (customer-submitted) -- the part
+--      stage 08 calibrates on and the only part the headline is sliced to?
 -- Read specs/01-estimand.md SS9 before reading the output.
 --
 -- Read-only. Expect minutes, not seconds -- it aggregates over assertions.
@@ -12,19 +14,21 @@
 \set window_end   '2026-10-01'
 \set horizon_days 30
 
--- Scans that are in-scope per estimand SS1, revealed, and PE-ish.
+-- Scans that are in-scope per estimand SS10 (feeds in), revealed, and PE-ish.
+-- Same filters as 02_base_pull.sql's `scoped`, so the two row counts can agree.
 -- mimetype is NECESSARY BUT NOT SUFFICIENT: WINDOWS_EXECUTABLE_MIMETYPES also
 -- admits CAB, MSI, MS Access and VBE, so the authoritative PE gate is the
 -- OpenSearch pass in 02. This list is the three that are actually PE-bearing.
 WITH scoped AS (
-    SELECT ai.number, ai.sha256, ai.completed
+    SELECT ai.number, ai.sha256, ai.completed, ai.scan_config
       FROM artifactinstance ai
      WHERE ai.meta_community = '_public'          -- NOTE the leading underscore
        AND ai.artifact_type  = 'FILE'
        AND ai.completed IS NOT NULL               -- revealed; NOT window_closed
        AND ai.failed IS NOT TRUE
        AND ai.state::text <> 'KNOWN_GOOD'
-       AND ai.scan_config IS DISTINCT FROM 'feed' -- IS DISTINCT FROM: NULL is common
+       -- NO feed exclusion (decision 0010 / SS10). scan_config is carried instead and
+       -- reported as `provenance`, so the SS1 subset stays visible without being the frame.
        AND COALESCE(ai.actions->>'scan', ai.actions->>'_default', 'true')::boolean
        AND ai.mimetype IN ('application/x-dosexec',
                            'application/vnd.microsoft.portable-executable',
@@ -44,7 +48,8 @@ first_ever AS (
 -- T: the feature scan. One per artifact, per SS1's per-artifact counting rule.
 feature_scan AS (
     SELECT DISTINCT ON (s.sha256)
-           s.sha256, s.number AS instance_number, s.completed AS scoring_moment
+           s.sha256, s.number AS instance_number, s.completed AS scoring_moment,
+           s.scan_config
       FROM scoped s
       JOIN first_ever f
         ON f.sha256 = s.sha256
@@ -89,6 +94,7 @@ banded AS (
            v.n_responded,
            (l.sha256 IS NOT NULL) AS labellable,
            l.label_gap,
+           CASE WHEN fs.scan_config = 'feed' THEN 'feed' ELSE 'customer' END AS provenance,
            CASE WHEN v.n_definite IS NULL OR v.n_definite < 5 THEN 'below_floor'
                 ELSE CASE
                   WHEN v.n_malicious::float / v.n_definite = 0   THEN 'consensus_clean'
@@ -105,6 +111,8 @@ banded AS (
 SELECT stratum,
        count(*)                                   AS artifacts,
        count(*) FILTER (WHERE labellable)         AS labellable,
+       count(*) FILTER (WHERE provenance = 'customer')                AS customer_artifacts,
+       count(*) FILTER (WHERE labellable AND provenance = 'customer') AS customer_labellable,
        round(100.0 * count(*) FILTER (WHERE labellable)
              / nullif(sum(count(*) FILTER (WHERE labellable)) OVER (), 0), 1)
                                                   AS pct_of_labellable,
@@ -131,8 +139,10 @@ SELECT stratum,
 
 -- HOW TO READ THIS
 --
--- `labellable` is the real cohort size. `artifacts` minus `labellable` is the
+-- `labellable` is the real base size. `artifacts` minus `labellable` is the
 -- count with no T+30 scan yet, which is a WAITING problem, not a data problem.
+-- `customer_labellable` is the SS1 slice of it: stage 08 calibrates there and the
+-- headline AUC is sliced there, so it bounds what can be CLAIMED, not what can be trained.
 --
 -- Compare pct_of_labellable against the SS9 targets:
 --     contested 45 | leaning_* 15 each | consensus_* 10 each
@@ -151,8 +161,10 @@ SELECT stratum,
 -- to 5 here as a PLACEHOLDER. If this bucket is large, the floor is doing more
 -- work than intended and needs choosing deliberately rather than guessing.
 --
--- If total labellable is far below 10,000, the options in order of preference:
+-- If total labellable is far below the cohort size, the options in order of preference:
 --   widen the window forward (more recent artifacts, shorter horizon wait);
 --   lower the cohort size and say so;
 --   admit non-public communities and record the skew.
--- Do NOT relax the feed filter to make the number look better.
+-- Do NOT drop feeds to make the bands look like SS1: the training population is SS10
+-- by decision, and `customer_labellable` is the SS1 subset. The thinness of THAT
+-- column is the thing to watch -- it is what stage 08 calibrates on.

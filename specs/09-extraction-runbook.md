@@ -151,11 +151,20 @@ curl -sS -H "cf-access-token: $CF_ACCESS_TOKEN" -u "$ES_USER:$ES_PASS" \
   -H 'Content-Type: application/json' -d '{"query":{"exists":{"field":"pefile.imphash"}}}'
 ```
 
-> **The one layer not yet verified** is what sits *behind* Access. `artifact-index`
-> authenticates to this domain with HTTP Basic, and the wiki describes Kibana admins
-> creating **internal users mapped to the `polyswarm_ro` role**. If the domain's security
-> plugin wants that second login, `-u` carries it; if Access alone suffices, drop it. The
-> `_count` call above settles which in one request, and it is read-only either way.
+> **The second layer, settled 2026-10-05 from the charts rather than the wire.** `shifty`'s
+> chart carries *both* a Cloudflare Access service token and `OPENSEARCH_USER` /
+> `OPENSEARCH_PASSWORD` for this same host, so the domain's security plugin does want an
+> internal user behind Access; `-u` (or `POLYSCORE_ES_USER/PASSWORD`) carries it. The prod
+> door itself is still unexercised from a workstation — nobody has run `cloudflared access
+> login` here yet — and the read-only internal user to pair with it has to come from
+> wherever `shifty`'s does, because `ReadOnlyProd` cannot read prod secrets.
+>
+> **Stage has a door of its own, and it is unreachable from a workstation.** The stage
+> tunnel routes `kibana.internal.polyswarm.network` to stage's `vpc-elastic-01…` domain —
+> exactly artifact-index's stage `ELASTICSEARCH_URL` — but that hostname lives in a private
+> DNS zone (no public record, and no WARP client on this box). On stage, step 3 runs
+> **inside the CLI pod** with `03_pe_confirm.py --direct`, which takes endpoint and user from
+> the pod's own `ELASTICSEARCH_*` env. Same script, same query, no door.
 
 **What this door does not open:** Postgres. Steps 1, 2, 4 and 5 still ride the
 `pgpool` port-forward, which still needs an EKS access entry for `ReadOnlyProd`. The
@@ -360,9 +369,21 @@ likely to be wrong get tested before anybody spends a download on them:
    the hard cases live, written before anyone looked at data.
 
 **If `contested` comes back at 3%, move the bands — not the draw.** Record the revision in
-`decisions/`, per `99-open-questions.md`. If total `labellable` is far below 10,000, widen
-the window forward or lower the cohort size and say so. **Do not relax the feed filter to
-make the number look better.**
+`decisions/`, per `99-open-questions.md`. If total `labellable` is far below the cohort
+size, widen the window forward or lower the cohort size and say so. **Do not drop feeds to
+make the bands look like §1**: the survey counts the §10 population (feeds in, decision
+0010) with the same filters as `02_base_pull.sql`, so the two row counts can agree, and
+the `customer_*` columns are the §1 subset. Thinness *there* bounds what calibration can
+claim, not what training can use.
+
+> **Why this matters, measured on stage 2026-10-05.** The survey still carried the §1 feed
+> exclusion after decision 0010 removed it from the base pull, and reported **278**
+> artifacts in 2024-01-01 → 2026-09-01. The same window in Postgres holds 4.72M `_public`
+> instances over 3.32M artifacts, **1.58M of them revealed and 1.22M with assertions** —
+> feeds are 3.52M of the instances. `default` on stage is 1.13M never-completed instances
+> over just 68k artifacts and **2,681** artifacts ever revealed: the same test hashes
+> stored over and over. The 25-row stage base on disk predates the fix (`pe_gate:
+> skipped-REHEARSAL`) and is rehearsal-only.
 
 **Produces:** `data/reports/survey.txt` — one row per stratum, six or seven rows total.
 
@@ -370,7 +391,8 @@ make the number look better.**
 |---|---|
 | `stratum` | the six §9 bands plus `below_floor` |
 | `artifacts` | candidates in that band |
-| `labellable` | **the real cohort size** — those with a T+30 scan |
+| `labellable` | **the real base size** — those with a T+30 scan |
+| `customer_artifacts`, `customer_labellable` | the §1 subset of each — what stage 08 calibrates on and the headline is sliced to |
 | `pct_of_labellable` | compare against §9's targets: 45 / 15 / 15 / 10 / 10 |
 | `avg_definite_verdicts`, `avg_responded` | sanity check on engine coverage per band |
 
@@ -400,37 +422,40 @@ Unix epoch of the artifact's `first_seen` (`floor(epoch / 604800)`). Every read 
 ```bash
 .venv/bin/python pipeline/03_pe_confirm.py --window-start 2026-09-08 --window-end 2026-10-01 --count-only
 .venv/bin/python pipeline/03_pe_confirm.py --window-start 2026-09-08 --window-end 2026-10-01 \
-    > data/snapshots/pe_confirmed.txt
+    > data/pe_confirmed/prod_2026-09-08_2026-10-01.txt
 ```
 
 `--count-only` is the first thing to run: one `_count` request that also settles whether
 an internal user is needed behind Access.
 
-**Fallback: from the CLI pod**, if the door is ever closed. OpenSearch is an AWS-managed
-VPC endpoint rather than a k8s Service, so `port-forward` does not reach it; the pod
-already holds the endpoint and basic-auth credentials:
+**From the CLI pod — `--direct`.** OpenSearch is an AWS-managed VPC endpoint rather than
+a k8s Service, so `port-forward` does not reach it; the pod already holds the endpoint and
+basic-auth credentials as `ELASTICSEARCH_URL` / `ELASTICSEARCH_USER` / `ELASTICSEARCH_PASSWORD`,
+and `--direct` reads exactly those. The script is stdlib-only and is fed over stdin, so
+nothing is copied into the pod:
 
 ```bash
-kubectl --context us-prod -n ai exec -i deploy/artifact-index-cli-terminal -- \
-  python - <<'PY' > data/snapshots/pe_confirmed.txt
-from artifact_index.app import web
-from artifact_index import app as ai
-with web.app_context():
-    body = {"query": {"bool": {"filter": [
-                {"term":   {"meta_community": "_public"}},
-                {"exists": {"field": "pefile.imphash"}},
-                {"range":  {"scan.first_seen": {"gte": "2026-09-08", "lt": "2026-10-01"}}},
-            ]}},
-            "_source": ["artifact.sha256"]}
-    page = ai.elastic.search(index="metadata-*", body=body, scroll="5m", size=5000)
-    sid = page["_scroll_id"]
-    while page["hits"]["hits"]:
-        for h in page["hits"]["hits"]:
-            print(h["_source"]["artifact"]["sha256"])
-        page = ai.elastic.scroll(scroll_id=sid, scroll="5m")
-PY
-wc -l data/snapshots/pe_confirmed.txt
+POD=$(kubectl --context us-stage-blue -n ai get pods -o name | grep artifact-index-cli-terminal)
+kubectl --context us-stage-blue -n ai exec -i "$POD" -- python3 - \
+    --window-start 2024-01-01 --window-end 2026-09-01 --count-only --direct < pipeline/03_pe_confirm.py
+kubectl --context us-stage-blue -n ai exec -i "$POD" -- python3 - \
+    --window-start 2024-01-01 --window-end 2026-09-01 --direct < pipeline/03_pe_confirm.py \
+    > data/pe_confirmed/stage_2024-01-01_2026-09-01.txt
 ```
+
+This is the stage path (stage's door is private-DNS only) and the prod path once `exec`
+is granted; the door is for a workstation that has neither. **Stage, 2026-10-05: 966,504**
+confirmed-PE artifacts in that window — against 1.22M revealed-with-assertions artifacts in
+Postgres, so the PE share of the base is only known after step 4 intersects them.
+
+> **Scrolls on stage lose shards silently.** Two full scrolls ended at 795,000 and 760,000
+> of 966,504 with exit 0 and no error anywhere except `_shards.failed` on one page:
+> OpenSearch's search backpressure cancelling shard tasks for heap pressure
+> (`rejected_execution_exception: heap usage exceeded`). The script now fails any page
+> with a failed shard, retries the whole scroll at half the page size (`--page`,
+> `--retries`), buffers the list so a retry cannot leave half of it on stdout, and exits
+> non-zero if the final total disagrees with `_count`. A short gate is a biased gate, and
+> nothing downstream can tell.
 
 `exists: pefile.imphash` is **exact** here: a rejected `pefile` document is stripped to
 `{}` and removed from the ES document entirely, so presence of the field ⟺ `pefile.PE()`
@@ -441,8 +466,8 @@ cannot drift. Nothing time-varying may come from ES.
 > `app.elastic` is an **OpenSearch** client (`opensearch-py`). Do not
 > `from elasticsearch import …` inside that pod.
 
-**Produces:** `data/snapshots/pe_confirmed.txt` — newline-delimited sha256, one per line,
-no header.
+**Produces:** `data/pe_confirmed/<env>_<window>.txt` — newline-delimited sha256, one per
+line, no header.
 
 ```
 3f5a1c...  (64 hex chars)
@@ -452,10 +477,12 @@ b91e07...
 This is the **confirmed PE population**, and it is the denominator `π_i` will be computed
 against — which is why it must exist before step 4 and not after.
 
-**Done when** `wc -l` is a plausible fraction of step 2's `labellable` count. A number far
-*below* it means the mimetype pre-filter was admitting non-PE files (expected — it admits
-CAB, MSI, MS Access and VBE). A number far *above* it means the date range in the ES query
-does not match the SQL window.
+**Done when** the script exits 0 — it refuses to when the scroll total differs from
+`_count`. Then read `wc -l` against step 2: a number far *below* `labellable` means the
+mimetype pre-filter was admitting non-PE files (expected — it admits CAB, MSI, MS Access
+and VBE); a number far *above* `artifacts` means either the ES date range does not match
+the SQL window, or — as on stage — the index holds far more *stored* PE than Postgres has
+*revealed* scans.
 
 ---
 
