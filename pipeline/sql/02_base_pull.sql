@@ -28,14 +28,18 @@
 \set horizon_max_days 90      -- SET FROM 01_survey's gap_p90. Provisional.
 
 WITH scoped AS (
-    SELECT ai.number, ai.sha256, ai.completed
+    SELECT ai.number, ai.sha256, ai.completed, ai.scan_config
       FROM artifactinstance ai
      WHERE ai.meta_community = '_public'
        AND ai.artifact_type  = 'FILE'
        AND ai.completed IS NOT NULL
        AND ai.failed IS NOT TRUE
        AND ai.state::text <> 'KNOWN_GOOD'
-       AND ai.scan_config IS DISTINCT FROM 'feed'
+       -- NO feed exclusion here. This is the SS10 TRAINING population, feeds included;
+       -- the SS1 reference filter is stage 08's, applied when the calibrator narrows
+       -- back. scan_config is CARRIED so stage 08 can filter and the feed-vs-customer
+       -- probe has a label to predict. Measured on prod via Discover 2026-10-05:
+       -- 25.3M public PE with a parsed pefile doc in 24 days, visibly feed-dominated.
        AND COALESCE(ai.actions->>'scan', ai.actions->>'_default', 'true')::boolean
        AND ai.mimetype IN ('application/x-dosexec',
                            'application/vnd.microsoft.portable-executable',
@@ -51,7 +55,8 @@ first_ever AS (
 ),
 feature_scan AS (
     SELECT DISTINCT ON (s.sha256)
-           s.sha256, s.number AS instance_number, s.completed AS scoring_moment
+           s.sha256, s.number AS instance_number, s.completed AS scoring_moment,
+           s.scan_config
       FROM scoped s
       JOIN first_ever f ON f.sha256 = s.sha256 AND f.first_reveal = s.completed
      WHERE f.first_reveal >= :'window_start'::timestamp
@@ -92,7 +97,8 @@ SELECT fs.sha256,
        v.n_definite,
        v.n_malicious,
        v.n_responded,
-       'organic' AS provenance
+       fs.scan_config,
+       CASE WHEN fs.scan_config = 'feed' THEN 'feed' ELSE 'customer' END AS provenance
   FROM feature_scan fs
   JOIN label_scan l ON l.sha256 = fs.sha256       -- INNER: no natural label, not in the base
   JOIN verdicts   v ON v.sha256 = fs.sha256

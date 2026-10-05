@@ -168,8 +168,25 @@ blocker narrows to exactly that one thing.
 meta_community:"_public" and pefile.imphash:* and scan.first_seen >= "2026-09-08" and scan.first_seen < "2026-10-01"
 ```
 
-That number is the first real prod figure this project can produce today, with no
-infrastructure change at all.
+**Run 2026-10-05: 25,265,459 hits** over Sep 8 – Oct 1. Read it correctly: ES has no
+`scan_config`, so this is the **§10 training population, feeds included** — and the sample
+documents say so plainly (six `.exe` within 16 bytes of each other, filename = sha256,
+scanned once, ~190 ms apart: a polymorphic feed). The §1 customer population is an unknown
+minority of it. Volume is not the constraint anywhere in this project; ~1M PE/day means
+1M+ samples is one day of traffic.
+
+> **The constraint is time, and it is arithmetic.** The §1 window opens 2026-09-08 and the
+> training arm needs a natural rescan **≥30 days** after T. So nothing in this window can
+> be labellable before **Oct 8**, and the whole window is not aged until **~Oct 31** — and
+> then only the fraction that someone actually rescanned. A base pull over the §1 window
+> is a **November** artifact. To have a training set sooner, pull a window that is already
+> aged (pre-September) and take the PE gate from the Postgres heuristic, since ES coverage
+> back there is ~37% — which is Estimand B's path applied to A. The forced **validation**
+> tranche for Sep 8 is due **Oct 8** regardless, and has to be enqueued before then.
+
+Two more numbers worth one Discover query each: the same DQL **without** `pefile.imphash:*`
+gives the parse-failure rate; and `scan.first_seen < "2026-09-08" and scan.latest_scan.created >= "2026-09-08"`
+is a rough proxy for how often old artifacts get rescanned at all.
 
 Coverage caveat: before September 2026 the index was ~37% populated and biased toward
 successfully-analysed files. For **A's window** that is moot. For **Estimand B**, ES
@@ -483,7 +500,7 @@ always answerable.
 | `sha256`, `instance_number`, `scoring_moment` | the feature scan (T) |
 | `label_instance_number`, `label_moment`, `label_gap` | the natural label scan |
 | `n_definite`, `n_malicious`, `n_responded` | **the band inputs** — stratum is computed at draw time, not here, so band edges can be revised without a re-pull |
-| `provenance` | `organic` |
+| `scan_config`, `provenance` | carried, not filtered: `feed` / `customer`. **The base is the §10 training population, feeds included**; stage 08 narrows to §1. Measured in Discover 2026-10-05: 25.3M public PE in 24 days, visibly feed-dominated |
 
 **Done when** the row count agrees with step 2's `labellable`. A gap means the bound or
 the PE confirmation moved the population.
