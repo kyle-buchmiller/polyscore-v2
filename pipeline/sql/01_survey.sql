@@ -13,6 +13,16 @@
 \set window_start '2026-09-08'
 \set window_end   '2026-10-01'
 \set horizon_days 30
+\set survey_sample_pct 100   -- deterministic sample of artifacts, by hashtext(sha256); 100 = all
+
+-- SAMPLING. This survey estimates SHARES and PERCENTILES, and both are as good from a
+-- deterministic 10% of artifacts as from all of them -- while the full query over 1.2M
+-- feeds-in artifacts on the stage replica blew a 30-minute statement timeout
+-- (2026-10-05). The sample is keyed on the artifact, so every CTE sees the same subset
+-- and per-artifact facts (first reveal, label scan, verdicts) are never split. The
+-- `artifacts` and `labellable` COUNTS are of the sample: multiply by 100/survey_sample_pct.
+-- The base pull never samples -- it must see every labellable row for pi -- so it is the
+-- step that pays the full cost, once.
 
 -- Scans that are in-scope per estimand SS10 (feeds in), revealed, and PE-ish.
 -- Same filters as 02_base_pull.sql's `scoped`, so the two row counts can agree.
@@ -27,6 +37,8 @@ WITH scoped AS (
        AND ai.completed IS NOT NULL               -- revealed; NOT window_closed
        AND ai.failed IS NOT TRUE
        AND ai.state::text <> 'KNOWN_GOOD'
+       AND ai.completed >= :'window_start'::timestamp   -- as 02_base_pull; first_ever still looks at all time
+       AND (abs(hashtext(ai.sha256)) % 100) < :survey_sample_pct
        -- NO feed exclusion (decision 0010 / SS10). scan_config is carried instead and
        -- reported as `provenance`, so the SS1 subset stays visible without being the frame.
        AND COALESCE(ai.actions->>'scan', ai.actions->>'_default', 'true')::boolean

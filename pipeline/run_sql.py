@@ -51,19 +51,25 @@ def main() -> None:
     if variables:
         print(f"-- variables: {variables}\n")
 
+    failed = 0
     with psycopg.connect(load_dsn(args.env), connect_timeout=15) as conn:
         conn.read_only = True
         with conn.cursor() as cur:
             cur.execute(f"SET statement_timeout = '{args.timeout}'")
             for n, stmt in enumerate(statements, 1):
                 preview = " ".join(stmt.split())[:90]
-                print(f"\n=== [{n}/{len(statements)}] {preview}…\n")
+                print(f"\n=== [{n}/{len(statements)}] {preview}…\n", flush=True)
                 try:
                     cur.execute(stmt)
-                    print(render(cur))
+                    print(render(cur), flush=True)
                 except Exception as exc:                       # noqa: BLE001
-                    print(f"!! FAILED: {type(exc).__name__}: {exc}", file=sys.stderr)
+                    # Keep going so the later statements still run, but say so at exit:
+                    # a timed-out survey that exits 0 reads as "done" to whatever called it.
+                    print(f"!! FAILED: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
+                    failed += 1
                     conn.rollback()
+    if failed:
+        sys.exit(f"{failed} of {len(statements)} statement(s) failed")
 
 
 if __name__ == "__main__":
