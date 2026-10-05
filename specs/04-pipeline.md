@@ -35,7 +35,7 @@ types and will not silently turn a hash into a number.
 |---|---|---|---|
 | `01_extract.py` (01a) | Postgres | `data/base/<window>.parquet`, `.assertions.parquet`, `.control.parquet` (pending) + manifest | sqlalchemy, psycopg, pandas, pyarrow |
 | `01b_draw.py` | base | `data/runs/<run_id>/cohort.parquet` + manifest | pandas, pyarrow |
-| `02_compose.py` | snapshot | `data/reports/composition.txt` | pandas |
+| `02_compose.py` | base (+ one run's cohort) | `data/reports/composition_<window>[_<run_id>].txt` | pandas |
 | `03_label.py` | snapshot | `data/labels/<run>.parquet` | pandas |
 | `04_features.py` | snapshot + labels | `data/features/<run>.parquet` | pandas, numpy |
 | `05_split.py` | features | `data/splits/{train,validate,test}.parquet` (+ `*_random.parquet`) | pandas, scikit-learn |
