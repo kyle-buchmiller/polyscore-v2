@@ -189,6 +189,25 @@ cannot be seen. It can only be **bounded empirically**, which is the validation 
 > predict `plan` as well as `provenance`; and identifying that account is on
 > [`99-open-questions.md`](./99-open-questions.md).
 
+**What the base does and does not contain.** The base pull keeps only artifacts that
+*have* a natural label scan in bound (`02_base_pull.sql` inner-joins `label_scan`), so §9's
+`π` is the draw's inclusion probability *within the labellable population* — it undoes our
+stratification, not the rescanner's selection. Un-rescanned artifacts appear in two places
+only: `01_survey.sql` counts them per band (`artifacts` against `labellable`, the coarse
+per-stratum rescan rate), and a seeded **control sample** of them — T scan and assertions,
+no label, sized by `POLYSCORE_CONTROL_SIZE` (default 10k; the setting and the pull are not
+yet implemented, see stage 01a) — is set aside for the probe below and never enters
+training. Reweighting a labellable-population estimate to the full population needs a
+second factor, `1 / P(rescanned | X)`, which is what that probe estimates.
+
+**The rescan probe** (stage 06; a report, not a gate): a classifier predicting
+*was-rescanned* from the T feature set, cohort against control. Near 0.5 AUC means the
+rescanned subset looks random in feature space; high AUC is covariate shift — expected,
+and handled by conditioning — and the probe's job is then to say *where* coverage is thin
+(contested files are rescanned sooner, consensus-clean files hardly ever). Its fitted
+propensity is available as an optional inverse-probability weight. It cannot see selection
+on outcome given features; only the validation arm can.
+
 **Why validation must be forced.** A forced rescan does not remove variance — it removes
 **correlated** variance. Natural gaps are set by when somebody chose to look at a file
 again, which correlates with how interesting it is, and therefore with the outcome.

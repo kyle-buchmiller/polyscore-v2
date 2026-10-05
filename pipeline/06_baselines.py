@@ -8,10 +8,15 @@ Baseline 3 -- a plain count of engines asserting malicious at T -- is the diagno
   >0.97           the label is a restatement of the features; STOP and fix the labels
   ~0.50           something is disconnected
 
+Then three probes on the feature set (estimand §4, §9, §10):
+  provenance: injected vs organic   GATE -- blocking above ~0.6 AUC
+  provenance: feed vs customer      GATE -- blocking above ~0.6 AUC
+  rescan: cohort vs control         REPORT -- per-band coverage + optional propensity weight
+
 Does NOT read the test split.
 
-Reads : data/splits/{train,validate}.parquet
-Writes: data/reports/baselines.txt
+Reads : data/splits/{train,validate}.parquet, data/base/<window>.control.parquet
+Writes: data/reports/baselines.txt, data/reports/rescan_propensity.parquet
 
 Contract: specs/04-pipeline.md
 """

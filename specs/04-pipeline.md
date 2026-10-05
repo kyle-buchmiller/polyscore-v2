@@ -33,7 +33,8 @@ types and will not silently turn a hash into a number.
 
 | Stage | Reads | Writes | Libraries |
 |---|---|---|---|
-| `01_extract.py` | Postgres | `data/snapshots/<run>.parquet` + manifest | sqlalchemy, psycopg, pandas, pyarrow |
+| `01_extract.py` (01a) | Postgres | `data/base/<window>.parquet`, `.assertions.parquet`, `.control.parquet` (pending) + manifest | sqlalchemy, psycopg, pandas, pyarrow |
+| `01b_draw.py` | base | `data/runs/<run_id>/cohort.parquet` + manifest | pandas, pyarrow |
 | `02_compose.py` | snapshot | `data/reports/composition.txt` | pandas |
 | `03_label.py` | snapshot | `data/labels/<run>.parquet` | pandas |
 | `04_features.py` | snapshot + labels | `data/features/<run>.parquet` | pandas, numpy |
@@ -54,6 +55,12 @@ inside `[horizon_days, horizon_max_days]`, with both scans' assertions. **No sam
 reproducibility unit; it runs rarely. `engine_metadata` is **projected** to
 `malware_family` plus a fixed short list, never pulled whole — at 1M artifacts the full
 JSONB is tens of gigabytes.
+
+*01a also sets aside a control sample* — **not yet implemented**. A seeded random
+`POLYSCORE_CONTROL_SIZE` (default 10k) of eligible artifacts that have **no** natural later
+scan in bound, with the T scan's assertions only and no label, written to
+`data/base/<window>.control.parquet`. It exists for stage 06's rescan probe and the
+optional propensity weight (estimand §4) and never enters a run draw.
 
 *01b · run draw.* From the base Parquet, **locally**, draw `cohort_size` artifacts
 stratified per §9 with `random_seed`, recording `π_draw` per row. Never touches the
@@ -152,6 +159,16 @@ above **~0.6 AUC**:
 A failure is fixed in the **feature set**, never by raising the threshold. If it cannot be
 fixed, the fallback is narrowing the training frame back toward §1 and accepting a thinner
 contested band — a real cost, and the reason the probe exists rather than a blanket ban.
+
+**Plus the rescan probe**, which is a report rather than a gate: a classifier predicting
+*was-rescanned* from the feature set, the cohort against the control sample stage 01a sets
+aside (estimand §4). It answers how far the natural-rescan selection is visible in the
+features — near 0.5, the labellable subset looks random; high, covariate shift, which
+conditioning handles — and reports per-band coverage so a thin region is known before
+training. Its propensity is written to `data/reports/rescan_propensity.parquet` as an
+optional inverse-probability weight for stages 07–08; nothing consumes it by default. It
+cannot detect selection on outcome given features; the validation set in stage 09 is the
+only check for that.
 
 **07 · train.** Exactly three comparisons — (a) logistic regression on the *old*
 one-column encoding, (b) the same model on the *new* two-column encoding, (c)
