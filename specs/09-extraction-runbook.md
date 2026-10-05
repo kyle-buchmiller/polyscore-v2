@@ -713,6 +713,28 @@ rather than the whole candidate pool — which is the main reason the draw comes
 
 ---
 
+## Measuring the rescan rate (and watching the validation tranche)
+
+The one question ES could not answer — *how many artifacts get rescanned at all* — has a
+dashboard answer from **2026-09-28 onward**: the `artifact_index.scan.submitted` counter,
+tagged `endpoint:rescan` and split by `actor` and `plan`. Details and the first six days'
+numbers in [`02-data.md`](./02-data.md).
+
+Two uses here:
+
+- **Sizing the training arm.** `endpoint:rescan` by `plan`, daily. Measured: ~360/day,
+  ~90% one `plan:other` account in ~500-row batches, ~23/day organic enterprise. Read that
+  before trusting "natural rescans" as an unselected label source — they are not.
+- **Confirming the validation tranche ran.** Forced rescans through `ai instance rescan`
+  carry **`actor:internal`**. The day after each tranche, `endpoint:rescan actor:internal`
+  should show roughly the tranche size. Zero means it did not enqueue. This is cheaper and
+  faster than querying Postgres for the new instance rows.
+
+**For the §1 window itself the counter is blind** — it did not exist. That rescan rate
+still comes from `01_survey.sql` once the port-forward is possible.
+
+---
+
 ## Not yet answered
 
 These are operational facts nobody has recorded, and each blocks something specific:

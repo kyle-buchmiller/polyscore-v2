@@ -131,6 +131,50 @@ The `pefile.` prefix is added at ES-serialization time and does not exist in Pos
 Join `metadata.artifact_instance_id → artifactinstance.number` and
 `metadata.artifact_metadata_id → artifactmetadata.number`, both on `number`, never `id`.
 
+## Datadog: the scan-submission counter
+
+`artifact-index` emits **`artifact_index.scan.submitted`** (DogStatsD, type `rate`) on every
+submission, with tags that answer two questions the stores above cannot answer cheaply:
+
+| Tag | Values seen (prod, 2026-09-28 → 10-04) | Why it matters |
+|---|---|---|
+| `endpoint` | `instance`, `url`, **`rescan`** | **rescans are counted directly** |
+| `actor` | `user`, (`internal` for `ai instance rescan` / the AKM key) | separates our forced tranches from everyone else's rescans |
+| `scan_config` | `default`, `feed`, `more-time`, `most-time`, `none` | **the feed split ES lacks** |
+| `meta_community` | `public`, `private` | bucketed, not the raw name |
+| `plan` | `enterprise`, `community`, `anonymous`, `small_business`, **`other`** | who; `other` is anything outside the allow-list in `metrics._KNOWN_PLANS` |
+| `stage` | `created`, `started` | one of each per submission — **count `created`** or you double |
+
+**It counts bounties, not artifacts.** That is the whole reconciliation with OpenSearch:
+Discover showed **25.3M** public PE with a parsed `pefile` doc over 24 days (~1.05M/day);
+the counter shows **~365k scans/day**. So roughly **two-thirds of indexed PE are stored and
+never scanned** — they have analyzer output and no assertions, and cannot be a feature row.
+Of the third that *are* scanned, **~99% are feed** (~360k/day) against **~3–8k/day of
+customer `default`** submissions. The §1 population is that last number.
+
+> **The counter went live on 2026-09-28.** It cannot see the §1 window (Sept 8 – Oct 1).
+> For that window the rescan rate is a Postgres question, full stop; from Sept 28 onward
+> it is a dashboard. Measured 2026-10-05 over its first six full days:
+>
+> - **Rescans: ~360/day**, all `actor:user` — no `ai instance rescan` traffic at all.
+> - **~90% of them are `plan:other`**, arriving in **~500-per-day batches** (518, 500, 515
+>   on the burst days). One actor's job, not organic interest.
+> - **Enterprise rescans: ~23/day, steady.** That is the organic floor.
+> - **Oct 4: 180,281 `default` submissions**, 20–200× a normal day — also `plan:other`.
+>
+> Which puts a name on the selection §4 worries about: *natural rescans are overwhelmingly
+> whatever one unidentified-plan account chose to rescan.* Until that account is
+> identified, the training arm's labels are selected by its criteria, not by anything we
+> chose. Query shape, daily:
+>
+> ```
+> sum:artifact_index.scan.submitted{env:prod,endpoint:rescan} by {actor,plan}.as_count().rollup(sum, 86400)
+> ```
+>
+> Use the **timeseries** form with an explicit rollup. A scalar `sum` aggregator over this
+> rate-type metric returned 300 where the daily series summed to ~2,800 for the same window
+> — a normalization artifact, not data.
+
 ## The cohort filters, and how each one bites
 
 | Filter | Column | The trap |

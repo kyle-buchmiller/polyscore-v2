@@ -82,6 +82,23 @@ only access.
   non-null, 0 true). Both code reads were partly right: it is defaulted, not assigned. It
   carries no information — use the `detections` JSONB.
 
+## Surfaced by the Datadog counter, 2026-10-05
+
+- **Who is `plan:other`?** It is ~90% of all rescans (in ~500/day batches) and ~97% of
+  customer `default` submissions, including a **180,281-row spike on Oct 4**. `other` means
+  "not in `metrics._KNOWN_PLANS`" — a legacy or custom plan, an internal account that does
+  not use the AKM key, or an integration. Until it is identified, the §1 "customer"
+  population and the natural-rescan training arm are both mostly *this one account*, and
+  the reference population's meaning depends on what it is. AKM / billing can answer from
+  the account number; the counter cannot.
+- **The Oct 4 spike.** 180k `default` submissions in one day against a ~3k baseline. Bulk
+  upload or a job. If it recurs, the §1 window's composition is dominated by such events
+  and §9's draw should stratify on submission-day volume as well.
+- **Why zero `actor:internal`.** No `ai instance rescan` or `process-backlog.py` traffic in
+  six days is plausible, but worth confirming the AKM key comparison in `actor_tag` is
+  actually matching in prod — if it is not, internal rescans are being counted as `user`
+  and the "organic" numbers above are inflated.
+
 ## Blocking a real model
 
 - **Inter-analyst agreement in the 0.3–0.7 band.** Never measured. It is the ceiling on

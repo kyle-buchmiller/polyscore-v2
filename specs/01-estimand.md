@@ -182,6 +182,13 @@ case is selection on *outcome given features*: someone rescanned because they al
 it was bad in a way the T-features do not show. That cannot be reweighted away, because it
 cannot be seen. It can only be **bounded empirically**, which is the validation arm's job.
 
+> **Measured 2026-10-05, prod, six days:** ~360 natural rescans/day, **~90% from a single
+> `plan:other` account in ~500-per-day batches**, with enterprise contributing a steady
+> ~23/day underneath. So "natural rescans" is, today, mostly one actor's job — its criteria
+> for what to rescan *are* the training arm's selection. The provenance probe should
+> predict `plan` as well as `provenance`; and identifying that account is on
+> [`99-open-questions.md`](./99-open-questions.md).
+
 **Why validation must be forced.** A forced rescan does not remove variance — it removes
 **correlated** variance. Natural gaps are set by when somebody chose to look at a file
 again, which correlates with how interesting it is, and therefore with the outcome.
