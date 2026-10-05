@@ -107,6 +107,35 @@ only access.
   actually matching in prod — if it is not, internal rescans are being counted as `user`
   and the "organic" numbers above are inflated.
 
+## Surfaced on stage, 2026-10-05
+
+- **The monolithic base pull does not scale, and the survey only does because it samples.**
+  The feeds-in survey over the stage window (1.22M revealed-with-assertions artifacts) blew
+  a 30-minute statement timeout. `EXPLAIN` says why: `first_ever` is a second full
+  sequential scan of `artifactinstance` hash-joined to all of `scoped`, aggregated through
+  an 8-partition disk spill, and every downstream CTE (label scan, verdict counts) is a
+  per-artifact index nested loop — cost scales with the whole population. The survey now
+  takes `survey_sample_pct` (deterministic by `hashtext(sha256)`), which is legitimate for
+  shares and percentiles. **The base pull cannot sample** — `π` needs every labellable row —
+  so `02_base_pull.sql` as one statement is the step that will fail first on prod, where
+  `artifactinstance` is tens of times larger. The restructure is the pattern the assertions
+  pull already uses: one scan statement (`scoped` + `first_ever` → sha256, T, scan_config,
+  to the client), then **chunked per-artifact statements** keyed `= ANY(array)` for the
+  label scan and the verdict counts, then the assertions chunks. Bounded statement time,
+  resumable by chunk, and no single statement anywhere near a timeout. On prod, `first_ever`
+  over *all time* also needs either an index that serves `(sha256, completed)` or a bounded
+  lookback — and a lookback is a semantic change to "first sighting" that must be written
+  down before it is coded.
+- **Stage cannot speak to §1 at all.** Its `default` traffic is 1.13M never-completed
+  instances over 68k artifacts with 2,681 ever revealed — the same test hashes stored over
+  and over. Stage rehearses every mechanical step of the §10 pipeline and nothing about the
+  customer population, calibration, or the validation arm's selection question.
+- **A rehearsal base can be stale in a way nothing flags.** The 25-row stage base predated
+  decision 0010 and carried `pe_gate: skipped-REHEARSAL`; the draw, the stability runs and
+  `02_compose` all ran happily on it. The manifest records the query hash, so a check that
+  the base's `query_sha256` matches the current `02_base_pull.sql` is cheap and worth
+  adding to `01b_draw.py`.
+
 ## Blocking a real model
 
 - **Inter-analyst agreement in the 0.3–0.7 band.** Never measured. It is the ceiling on
