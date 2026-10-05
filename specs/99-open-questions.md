@@ -91,6 +91,14 @@ only access.
   population and the natural-rescan training arm are both mostly *this one account*, and
   the reference population's meaning depends on what it is. AKM / billing can answer from
   the account number; the counter cannot.
+  **Start with the two names the code already knows about.** The comment on
+  `_KNOWN_PLANS` in `artifact-index/src/artifact_index/metrics.py` says real AKM responses
+  carry plan names absent from `settings.AccountPlans` — it names **`'Polyswarm Internal'`**
+  and **`'Free Trial'`** — and those are exactly what collapse to `other`. A ~500/day batch
+  rescanner and a 180k single-day dump both read as *internal tooling on a non-AKM-key
+  account* far more than as a trial user. If that is what it is, the §1 "customer"
+  population is largely us, and `actor_tag` needs a second internal marker beyond the one
+  API key.
 - **The Oct 4 spike.** 180k `default` submissions in one day against a ~3k baseline. Bulk
   upload or a job. If it recurs, the §1 window's composition is dominated by such events
   and §9's draw should stratify on submission-day volume as well.
