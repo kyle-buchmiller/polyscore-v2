@@ -115,6 +115,10 @@ class Settings(BaseSettings):
     #: Which base snapshot a run draws from. A run never touches the database -- that
     #: is what makes it quick, concurrent, and reproducible. Set to the base's path.
     base_snapshot: Path | None = None
+    #: A base pulled by an older 02_base_pull.sql is refused by 01b_draw unless this is
+    #: set. The 25-row stage rehearsal base ran through five stability runs and stage 02
+    #: after decision 0010 had changed the population under it, and nothing said so.
+    allow_stale_base: bool = False
     #: Isolates every artifact a run writes under data/runs/<run_id>/. Two runs with
     #: the same base and seed must produce byte-identical files; this is how that is
     #: checked rather than assumed.

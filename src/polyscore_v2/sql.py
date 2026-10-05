@@ -7,6 +7,7 @@ runs under psql or under the pipeline. Shared by run_sql.py and 01_extract.py.
 
 from __future__ import annotations
 
+import hashlib
 import pathlib
 import re
 
@@ -65,3 +66,28 @@ def split_statements(sql: str) -> list[str]:
     if tail: out.append(tail)
     return [s for s in out
             if not all(l.strip().startswith("--") or not l.strip() for l in s.splitlines())]
+
+
+def statements_sha256(statements: list[str]) -> str:
+    """The hash 01_extract records as `query_sha256`: over the rendered statements."""
+    return hashlib.sha256("\n".join(statements).encode()).hexdigest()
+
+
+def base_query_drift(manifest: dict, sql_path: pathlib.Path) -> str | None:
+    """Re-render `sql_path` with the base's own variables and compare to its `query_sha256`.
+
+    None when the base was pulled by the query on disk; otherwise a one-line reason.
+    A base that predates a change to 02_base_pull.sql is not wrong in any way a draw can
+    see: the 25-row stage rehearsal base ran through the draw, five stability runs and
+    stage 02 after decision 0010 had changed the population under it. So it is checked.
+    """
+    recorded = manifest.get("query_sha256")
+    if not recorded:
+        return "base manifest records no query_sha256"
+    if not sql_path.exists():
+        return f"{sql_path} not found; cannot verify the base against it"
+    statements, _ = load_sql(sql_path, manifest.get("variables") or {})
+    if statements_sha256(statements) != recorded:
+        return (f"base was pulled by a different {sql_path.name} than the one on disk "
+                f"(recorded {recorded[:12]}...): re-pull, or set POLYSCORE_ALLOW_STALE_BASE=1")
+    return None

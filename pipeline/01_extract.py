@@ -29,7 +29,6 @@ Contract: specs/04-pipeline.md stage 01a, specs/09-extraction-runbook.md steps 4
 from __future__ import annotations
 
 import argparse
-import hashlib
 from pathlib import Path
 
 import pandas as pd
@@ -38,7 +37,7 @@ import psycopg
 from polyscore_v2.config import settings
 from polyscore_v2.io import write_snapshot
 from polyscore_v2.logging_setup import configure
-from polyscore_v2.sql import dsn_from_env, load_sql
+from polyscore_v2.sql import dsn_from_env, load_sql, statements_sha256
 
 log = configure()
 SQL = Path("pipeline/sql")
@@ -86,7 +85,7 @@ def main() -> None:
                  "horizon_max_days": str(args.horizon_max_days)}
     base_stmts, variables = load_sql(SQL / "02_base_pull.sql", overrides)
     assert_sql = (SQL / "03_assertions_pull.sql").read_text()      # psycopg-parameterized, not \set
-    query_hash = hashlib.sha256("\n".join(base_stmts).encode()).hexdigest()
+    query_hash = statements_sha256(base_stmts)   # what 01b_draw verifies the base against
 
     with psycopg.connect(dsn_from_env(), connect_timeout=15) as conn:
         conn.read_only = True                     # belt and braces; the replica enforces it anyway

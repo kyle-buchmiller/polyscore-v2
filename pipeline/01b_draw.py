@@ -31,8 +31,10 @@ from polyscore_v2.config import (
 from polyscore_v2.draw import check_draw, stratified_draw
 from polyscore_v2.io import read_snapshot, write_snapshot
 from polyscore_v2.logging_setup import configure
+from polyscore_v2.sql import base_query_drift
 
 log = configure()
+SQL = Path("pipeline/sql")
 
 
 def main() -> None:
@@ -40,6 +42,14 @@ def main() -> None:
         raise SystemExit("POLYSCORE_BASE_SNAPSHOT is unset — a run draws from a base, never the database")
     base, base_manifest = read_snapshot(Path(settings.base_snapshot))
     log.info("base loaded", extra={"rows": len(base), "base_sha256": base_manifest.get("content_sha256")})
+
+    # The base is only as current as the query that pulled it, and nothing downstream can
+    # tell: the stage rehearsal base predated decision 0010 and drew without complaint.
+    drift = base_query_drift(base_manifest, SQL / "02_base_pull.sql")
+    if drift and not settings.allow_stale_base:
+        raise SystemExit(drift)
+    if drift:
+        log.warning("drawing from a STALE base (POLYSCORE_ALLOW_STALE_BASE=1)", extra={"reason": drift})
 
     cohort, reports = stratified_draw(
         base,

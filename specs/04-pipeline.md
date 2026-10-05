@@ -66,7 +66,11 @@ optional propensity weight (estimand §4) and never enters a run draw.
 stratified per §9 with `random_seed`, recording `π_draw` per row. Never touches the
 database. Writes under `data/runs/<run_id>/`. This is what makes scaling a variable
 change, retraining quick, and concurrent runs free — and it is the only form under which
-"same base, same seed, same cohort" is a true sentence.
+"same base, same seed, same cohort" is a true sentence. Before drawing it **verifies the
+base against the query on disk**: the manifest's `query_sha256` is the hash of
+`02_base_pull.sql` rendered with the base's recorded variables, so a base pulled by an
+older query is refused with the reason unless `POLYSCORE_ALLOW_STALE_BASE=1`. The stage
+rehearsal base predated decision 0010 and drew without complaint, which is why.
 
 *01c · validation tranche.* Separately and once: draw `validation_size` artifacts **blind
 to rescan history**, enqueue daily forced tranches, harvest after the horizon. The gap is

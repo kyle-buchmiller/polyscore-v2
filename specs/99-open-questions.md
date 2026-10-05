@@ -132,9 +132,9 @@ only access.
   customer population, calibration, or the validation arm's selection question.
 - **A rehearsal base can be stale in a way nothing flags.** The 25-row stage base predated
   decision 0010 and carried `pe_gate: skipped-REHEARSAL`; the draw, the stability runs and
-  `02_compose` all ran happily on it. The manifest records the query hash, so a check that
-  the base's `query_sha256` matches the current `02_base_pull.sql` is cheap and worth
-  adding to `01b_draw.py`.
+  `02_compose` all ran happily on it. **Closed the same day:** `sql.base_query_drift`
+  re-renders the query on disk with the base's own recorded variables and compares hashes;
+  `01b_draw.py` refuses a drifted base unless `POLYSCORE_ALLOW_STALE_BASE=1`, and says why.
 
 ## Blocking a real model
 
