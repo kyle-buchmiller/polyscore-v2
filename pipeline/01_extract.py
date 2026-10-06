@@ -52,6 +52,7 @@ import psycopg
 
 from polyscore_v2.config import STRATUM_TARGETS, settings
 from polyscore_v2.draw import DRAWN_STRATA, assign_stratum
+from polyscore_v2.extract import LABEL_COLS, assert_exact_instance_numbers, label_frame
 from polyscore_v2.io import write_snapshot
 from polyscore_v2.logging_setup import configure
 from polyscore_v2.sql import dsn_from_env, query_sha256
@@ -61,7 +62,6 @@ SQL = Path("pipeline/sql")
 QUERY_FILES = ["02a_frame_chunk.sql", "02b_label_chunk.sql", "03_assertions_pull.sql"]
 CHUNK = 5_000
 FRAME_COLS = ["sha256", "instance_number", "scoring_moment", "scan_config", "incumbent_polyscore"]
-LABEL_COLS = ["sha256", "label_instance_number", "label_moment", "label_gap", "n_definite", "n_malicious", "n_responded"]
 
 
 def _frame(cur, df_cache: Path, sql: str, start: dt.datetime, end: dt.datetime, *, slack_days: int,
@@ -102,8 +102,7 @@ def _labels(cur, df_cache: Path, sql: str, frame: pd.DataFrame, *, horizon_days:
                           "instance_numbers": [int(x) for x in part["instance_number"]],
                           "moments": [pd.Timestamp(x).to_pydatetime() for x in part["scoring_moment"]],
                           "horizon_days": int(horizon_days), "horizon_max_days": int(horizon_max_days)})
-        chunk = pd.DataFrame(cur.fetchall(), columns=LABEL_COLS)
-        chunk["label_gap"] = chunk["label_gap"].astype(str).where(chunk["label_gap"].notna(), None)
+        chunk = label_frame(cur.fetchall())
         chunk.to_parquet(cache, index=False)
         out.append(chunk)
         log.info("label chunk", extra={"chunk": i + 1, "of": n, "labellable": int(chunk["label_instance_number"].notna().sum()),
@@ -229,6 +228,7 @@ def main() -> None:
 
         labellable = merged["label_instance_number"].notna()
         base = merged[labellable].sort_values("sha256").reset_index(drop=True)
+        assert_exact_instance_numbers(merged, "label_instance_number")
         base["label_instance_number"] = base["label_instance_number"].astype("int64")
         for c in ("n_definite", "n_malicious", "n_responded"):
             # A labellable artifact with no assertion rows at T has NULL counts: a real row,
