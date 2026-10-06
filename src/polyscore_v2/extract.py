@@ -18,10 +18,15 @@ NULLABLE_INTS = ("label_instance_number", "n_definite", "n_malicious", "n_respon
 
 def label_frame(rows: list[tuple]) -> pd.DataFrame:
     """One label chunk's rows as a frame whose integer columns stay exact when NULL."""
-    chunk = pd.DataFrame(rows, columns=LABEL_COLS)
+    # dtype=object FIRST: pd.DataFrame(rows) would infer float64 for an int column with a
+    # None in it, and the rounding happens there, before any astype can save it. From
+    # object, Int64 is exact.
+    chunk = pd.DataFrame(rows, columns=LABEL_COLS, dtype=object)
     for c in NULLABLE_INTS:
         chunk[c] = chunk[c].astype("Int64")
-    chunk["label_gap"] = chunk["label_gap"].astype(str).where(chunk["label_gap"].notna(), None)
+    chunk["sha256"] = chunk["sha256"].astype(str)
+    chunk["label_moment"] = pd.to_datetime(chunk["label_moment"])
+    chunk["label_gap"] = chunk["label_gap"].map(lambda x: None if x is None else str(pd.Timedelta(x)))
     return chunk
 
 
