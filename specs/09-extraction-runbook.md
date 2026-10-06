@@ -772,6 +772,10 @@ rather than the whole candidate pool — which is the main reason the draw comes
 | Stage 04 runs out of memory | the matrix was loaded whole. At 1M it must be pivoted in artifact-keyed chunks |
 | The base is huge and slow to pull | expected at 1M; it runs once. If it is being re-pulled per run, the two tiers have been collapsed and concurrency and reproducibility are both gone |
 | Validation AUC far below held-out training AUC | the natural rescans were selected on something the T-features do not carry. This is the finding the validation set exists to produce |
+| A chunk statement takes **seconds per row** | the `unnest()` key is `text[]` against the `CHAR(64)` column, so the join casts the column and loses `ix_artifactinstance_sha256` — a full scan per chunk (measured: 25 s for 25 artifacts; 0.10 s typed `char(64)[]`). `EXPLAIN` the chunk and look for the index scan |
+| `query parameter missing: name` | psycopg parses placeholder-shaped text anywhere in the file, comments included. Never write the `%(…)s` form in a comment |
+| `server closed the connection unexpectedly` mid-run | the port-forward reached its lifetime (2 h here). Reopen it and rerun the same command; the chunk cache resumes where it stopped |
+| A full index scroll comes back short, exit 0 | search backpressure cancelled a shard task; `03_pe_confirm.py` now fails the page and retries smaller (step 3) |
 
 ---
 
