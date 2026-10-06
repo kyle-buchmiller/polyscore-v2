@@ -59,6 +59,9 @@ MIN_ANSWERING_ENGINES: int | None = None
 #: Stage 06 rejects the draw above this. A classifier that can predict ``provenance``
 #: from the feature set is identifying the upload batch rather than the file.
 PROVENANCE_PROBE_MAX_AUC = 0.6
+#: PROVISIONAL (decisions/0011, Proposed): the fewest definite verdicts at the label scan
+#: for a grade-1 label to be issued at all. Below it the row is `undecidable/below_floor`.
+LABEL_MIN_DEFINITE = 5
 
 #: Columns never mixed into a prevalence estimate: the injection arm has no inclusion
 #: probability by construction, so 1/pi is undefined for it.

@@ -39,15 +39,78 @@ class Contribution:
     logit: float
 
 
-def fit_calibrator(base_scores: np.ndarray, y_true: np.ndarray, *, method: str = "sigmoid"):
+@dataclass(frozen=True)
+class Calibrator:
+    """Platt scaling: p = sigmoid(a * score + b). Two floats, and they ARE the base rate."""
+
+    a: float
+    b: float
+    n_fit: int
+    provisional: bool  # fitted on grade < 3 labels: a rehearsal of the mechanism, not a probability
+
+    def predict_proba(self, base_scores: np.ndarray) -> np.ndarray:
+        z = self.a * np.asarray(base_scores, dtype="float64") + self.b
+        return 1.0 / (1.0 + np.exp(-z))
+
+
+def fit_calibrator(
+    base_scores: np.ndarray, y_true: np.ndarray, *, method: str = "sigmoid",
+    sample_weight: np.ndarray | None = None, provisional: bool = True,
+) -> Calibrator:
     """Fit the monotone map from base score to probability, on HELD-OUT data.
 
     `sigmoid` is Platt scaling: two parameters, well-behaved at pilot volumes.
     `isotonic` is more flexible and will overfit a small calibration set -- it also
     produces plateaus that map large blocks to an identical probability, which silently
     randomises queue order within a block. Rank on the RAW score, never this output.
+    It is refused here for exactly that reason; revisit when the calibration set is large.
     """
-    raise NotImplementedError("stage 08 — see specs/06-signals.md")
+    if method != "sigmoid":
+        raise NotImplementedError(f"{method}: only Platt scaling at pilot volumes (see docstring)")
+    from sklearn.linear_model import LogisticRegression
+
+    s = np.asarray(base_scores, dtype="float64").reshape(-1, 1)
+    y = np.asarray(y_true).astype(int)
+    if len(np.unique(y)) < 2:
+        raise ValueError("calibration needs both classes present")
+    lr = LogisticRegression(C=1e6, max_iter=2000).fit(s, y, sample_weight=sample_weight)
+    return Calibrator(a=float(lr.coef_[0, 0]), b=float(lr.intercept_[0]), n_fit=int(len(y)),
+                      provisional=provisional)
+
+
+def _logit(p: np.ndarray) -> np.ndarray:
+    p = np.clip(np.asarray(p, dtype="float64"), 1e-6, 1 - 1e-6)
+    return np.log(p / (1 - p))
+
+
+@dataclass(frozen=True)
+class Combiner:
+    """logit(polyscore) = logit(base probability) + sum_s w_s * signal_s.
+
+    Signals are columns of the frame passed to `apply`, 0/1 or small floats; a signal
+    with no column contributes nothing. Addition in log-odds is what keeps the output a
+    probability (decision 0005): `score * k` saturates and clamps, and clamping is how a
+    probability stops being one.
+    """
+
+    weights: dict[str, float]
+    provisional: bool
+
+    def apply(self, base_prob: np.ndarray, signals: pd.DataFrame | None = None
+              ) -> tuple[np.ndarray, list[list[Contribution]]]:
+        base = _logit(base_prob)
+        total = base.copy()
+        rows: list[list[Contribution]] = [[Contribution("engine_evidence", float(b))] for b in base]
+        if signals is not None:
+            for name, w in self.weights.items():
+                if name not in signals.columns:
+                    continue
+                v = signals[name].fillna(0).to_numpy(dtype="float64") * w
+                total = total + v
+                for i, x in enumerate(v):
+                    if x:
+                        rows[i].append(Contribution(name, float(x)))
+        return 1.0 / (1.0 + np.exp(-total)), rows
 
 
 def fit_combiner(base_scores: np.ndarray, signals: pd.DataFrame, y_true: np.ndarray):
@@ -57,10 +120,10 @@ def fit_combiner(base_scores: np.ndarray, signals: pd.DataFrame, y_true: np.ndar
     fitting this on delayed engine consensus produces a system that passes its own
     reliability gates while remaining definitionally uncalibrated.
     """
-    raise NotImplementedError("stage 08")
+    raise NotImplementedError("stage 08: needs grade-3 labels; use provisional_combiner until then")
 
 
-def provisional_combiner(weights: dict[str, float]):
+def provisional_combiner(weights: dict[str, float]) -> Combiner:
     """The interim posture from decision 0005, for use before grade-3 labels exist.
 
     Expert-set weights in LOG-ODDS, so the eventual refit is a parameter change rather
@@ -69,9 +132,12 @@ def provisional_combiner(weights: dict[str, float]):
     Weights are `logit += w`. Never `score * k` -- multipliers saturate and clamp, and
     clamping is how a probability stops being one.
     """
-    raise NotImplementedError("stage 08 — see decision 0005")
+    return Combiner(weights=dict(weights), provisional=True)
 
 
 def explain(contributions: list[Contribution]) -> pd.DataFrame:
     """Render the per-source drill-down, largest absolute effect first."""
-    raise NotImplementedError("stage 08")
+    df = pd.DataFrame([{"source": c.source, "logit": c.logit} for c in contributions])
+    if df.empty:
+        return df
+    return df.reindex(df["logit"].abs().sort_values(ascending=False).index).reset_index(drop=True)
