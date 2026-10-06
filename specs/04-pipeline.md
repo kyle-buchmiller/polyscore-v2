@@ -36,13 +36,19 @@ types and will not silently turn a hash into a number.
 | `01_extract.py` (01a) | Postgres | `data/base/<window>.parquet`, `.assertions.parquet`, `.control.parquet` (pending) + manifest | sqlalchemy, psycopg, pandas, pyarrow |
 | `01b_draw.py` | base | `data/runs/<run_id>/cohort.parquet` + manifest | pandas, pyarrow |
 | `02_compose.py` | base (+ one run's cohort) | `data/reports/composition_<window>[_<run_id>].txt` | pandas |
-| `03_label.py` | snapshot | `data/labels/<run>.parquet` | pandas |
-| `04_features.py` | snapshot + labels | `data/features/<run>.parquet` | pandas, numpy |
-| `05_split.py` | features | `data/splits/{train,validate,test}.parquet` (+ `*_random.parquet`) | pandas, scikit-learn |
-| `06_baselines.py` | splits (not test) | `data/reports/baselines.txt` | scikit-learn |
-| `07_train.py` | train + validate | `data/models/{a,b,c}.joblib` | scikit-learn, lightgbm |
-| `08_calibrate.py` | models + validate | `data/models/{calibrator,combiner}.joblib` | scikit-learn |
-| `09_evaluate.py` | models + calibrator + combiner + **test** | `data/reports/evaluation.txt`, `reliability.png` | scikit-learn, matplotlib |
+| `03_label.py` | run cohort + the base's assertions | `data/runs/<run_id>/labels.parquet`, `labels.report.txt` | pandas |
+| `04_features.py` | run cohort + assertions (+ optional static block) | `data/runs/<run_id>/features.parquet` (manifest carries the column groups) | pandas, numpy |
+| `05_split.py` | features + labels | `data/runs/<run_id>/splits/{train,validate,test}.parquet` (+ `*_random.parquet`), `splits.manifest.json` | pandas |
+| `06_baselines.py` | splits (not test) | `data/runs/<run_id>/reports/baselines.txt` (+ `.json`) | scikit-learn |
+| `07_train.py` | train + validate (+ random) | `data/runs/<run_id>/models/{a,b,c,b_random}.joblib`, `models.manifest.json` | scikit-learn, lightgbm |
+| `08_calibrate.py` | validate + models | `data/runs/<run_id>/models/calibrator_<key>.joblib`, `combiner.json`, `calibration.manifest.json` | scikit-learn |
+| `09_evaluate.py` | models + calibrators + combiner + **test** | `data/runs/<run_id>/reports/evaluation.txt` (+ `.json`), `reliability.png`, `test_access.log` | scikit-learn, matplotlib |
+
+Every stage from 03 on reads through `runs.load_run`, which verifies the run's cohort
+against its base by content hash, and writes once (`--overwrite` is the deliberate
+exception). Where a stage needs an input that does not exist yet, it uses the stand-in
+named in [`decisions/0011`](../decisions/0011-provisional-pilot-rules.md) and says so in
+its output.
 
 ## Stage contracts
 
