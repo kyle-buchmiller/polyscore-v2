@@ -26,6 +26,8 @@ class Run:
     base: pd.DataFrame
     base_manifest: dict
     assertions: pd.DataFrame
+    control: pd.DataFrame | None = None            # 01a's control sample: unlabellable artifacts, T scan only
+    control_assertions: pd.DataFrame | None = None
 
 
 def load_run(run_id: str | None = None) -> Run:
@@ -47,7 +49,12 @@ def load_run(run_id: str | None = None) -> Run:
                          f"(cohort manifest {str(cm.get('base_content_sha256'))[:12]}, "
                          f"base manifest {str(bm.get('content_sha256'))[:12]})")
     assertions = pd.read_parquet(base_path.with_suffix(".assertions.parquet"))
-    return Run(run_id, run_dir, cohort, cm, base, bm, assertions)
+    control = control_assertions = None
+    cpath = base_path.with_suffix(".control.parquet")
+    if cpath.exists():
+        control, _ = read_snapshot(cpath)
+        control_assertions = pd.read_parquet(cpath.with_suffix(".assertions.parquet"))
+    return Run(run_id, run_dir, cohort, cm, base, bm, assertions, control, control_assertions)
 
 
 def fresh(path: Path, overwrite: bool) -> Path:

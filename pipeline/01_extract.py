@@ -226,8 +226,11 @@ def main() -> None:
 
         labellable = merged["label_instance_number"].notna()
         base = merged[labellable].sort_values("sha256").reset_index(drop=True)
-        for c in ("label_instance_number", "n_definite", "n_malicious", "n_responded"):
-            base[c] = base[c].astype("int64")
+        base["label_instance_number"] = base["label_instance_number"].astype("int64")
+        for c in ("n_definite", "n_malicious", "n_responded"):
+            # A labellable artifact with no assertion rows at T has NULL counts: a real row,
+            # with zero responses, that assign_stratum puts below the floor.
+            base[c] = base[c].fillna(0).astype("int64")
         base["label_gap"] = base["label_gap"].astype(str)
         base = base[["sha256", "instance_number", "scoring_moment", "label_instance_number", "label_moment",
                      "label_gap", "n_definite", "n_malicious", "n_responded", "scan_config", "provenance",

@@ -28,13 +28,18 @@ def write_snapshot(df: pd.DataFrame, path: Path, *, stage: str, **meta: Any) -> 
         raise FileExistsError(f"{path} exists; snapshots are written once (delete it deliberately)")
     path.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(path, index=False)
+    # Hash the file AS READ BACK, not the frame in memory: a parquet round-trip can change a
+    # dtype (a nullable string column, datetime resolution), and read_snapshot compares
+    # against what it reads. Measured 2026-10-05: the first chunked stage base refused
+    # its own manifest over scan_config's NULLs.
+    written = pd.read_parquet(path)
     manifest = {
         "stage": stage,
         "written_at": dt.datetime.now(dt.UTC).isoformat(),
         "estimand_version": ESTIMAND_VERSION,
         "rows": int(len(df)),
         "columns": list(df.columns),
-        "content_sha256": _content_hash(df),
+        "content_sha256": _content_hash(written),
         "random_seed": settings.random_seed,
         **meta,
     }

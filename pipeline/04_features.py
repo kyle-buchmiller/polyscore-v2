@@ -53,6 +53,14 @@ def main() -> None:
     write_snapshot(matrix, out, stage="04_features", run_id=run.run_id, groups=groups,
                    n_engines=n_engines, static_block=str(a.static_block) if a.static_block else None,
                    base_content_sha256=run.base_manifest.get("content_sha256"))
+    # The control sample (estimand SS4): the same matrix for the unlabellable artifacts 01a
+    # set aside, so stage 06's rescan probe has its control class. Never trained on.
+    if run.control is not None and len(run.control):
+        cout = fresh(run.dir / "control_features.parquet", a.overwrite)
+        cmatrix, cgroups = build_matrix(run.control, run.control_assertions)
+        write_snapshot(cmatrix, cout, stage="04_features_control", run_id=run.run_id, groups=cgroups,
+                       control_pi=run.base_manifest.get("control_pi"))
+        log.info("control matrix built", extra={"rows": len(cmatrix)})
     print(f"features -- run {run.run_id}: {len(matrix)} rows, {n_engines} engines, "
           f"{len(groups['features_new'])} new-encoding columns, {len(groups['features_old'])} old-encoding columns"
           + (", static block merged" if static is not None else ", no static block"))

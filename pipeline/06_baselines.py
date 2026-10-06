@@ -28,6 +28,7 @@ import argparse
 import json
 import math
 import sys
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -37,9 +38,14 @@ from sklearn.model_selection import StratifiedKFold, cross_val_score
 from polyscore_v2.config import PROVENANCE_PROBE_MAX_AUC, settings
 from polyscore_v2.logging_setup import configure
 from polyscore_v2.modelling import CUSTOMER, design, fmt, metrics_table
+from polyscore_v2.io import read_snapshot
 from polyscore_v2.runs import load_run, read_manifest
 
 log = configure()
+
+
+def out_dir_for(run) -> Path:
+    d = run.dir / "reports"; d.mkdir(exist_ok=True); return d
 
 
 def verdict(b3: float) -> str:
@@ -106,11 +112,43 @@ def main() -> None:
         cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=settings.random_seed)
         scores = cross_val_score(LogisticRegression(C=1.0, max_iter=2000), X, prov, cv=cv, scoring="roc_auc")
         probes["feed_vs_customer"] = float(np.mean(scores))
-    probes["rescan_cohort_vs_control"] = "n/a: no control sample (01a, not yet implemented)"
-    lines.append("probes on the feature set (gate above %.2f AUC):" % PROVENANCE_PROBE_MAX_AUC)
+    control_path = run.dir / "control_features.parquet"
+    if not control_path.exists():
+        probes["rescan_cohort_vs_control"] = "n/a: no control sample beside this base (01a writes <window>.control.parquet)"
+    else:
+        # Was-rescanned, from the T features: the cohort (every labellable row, not just the
+        # modelling folds) against 01a's control sample. A REPORT, not a gate: high AUC is
+        # covariate shift, which conditioning handles; the propensity is an optional weight.
+        features, fm = read_snapshot(run.dir / "features.parquet")
+        control, _ = read_snapshot(control_path)
+        cols = fm["groups"]["features_new"]
+        Xc = design(features, cols, impute=True)
+        Xk = control.reindex(columns=cols, fill_value=0).pipe(design, cols, impute=True)
+        Xp = pd.concat([Xc, Xk], ignore_index=True)
+        yp = np.r_[np.ones(len(Xc)), np.zeros(len(Xk))]
+        if len(Xc) < 5 or len(Xk) < 5:
+            probes["rescan_cohort_vs_control"] = f"n/a: {len(Xc)} cohort vs {len(Xk)} control rows"
+        else:
+            folds = min(5, len(Xc), len(Xk))
+            cv = StratifiedKFold(n_splits=folds, shuffle=True, random_state=settings.random_seed)
+            clf = LogisticRegression(C=1.0, max_iter=2000)
+            auc_p = float(np.mean(cross_val_score(clf, Xp, yp, cv=cv, scoring="roc_auc")))
+            clf.fit(Xp, yp)
+            prop = pd.DataFrame({"sha256": features["sha256"], "stratum": features.get("stratum"),
+                                 "p_rescanned": clf.predict_proba(Xc)[:, 1]})
+            prop.to_parquet(out_dir_for(run) / "rescan_propensity.parquet", index=False)
+            per_band = prop.groupby("stratum")["p_rescanned"].mean().round(3).to_dict() if "stratum" in prop else {}
+            probes["rescan_cohort_vs_control"] = auc_p
+            probes["rescan_propensity_by_stratum"] = per_band
+    lines.append("probes on the feature set (provenance probes gate above %.2f AUC; the rescan probe reports):" % PROVENANCE_PROBE_MAX_AUC)
     failed = []
     for name, v in probes.items():
-        if isinstance(v, float):
+        if isinstance(v, dict):
+            lines.append(f"  {name:28s} " + ", ".join(f"{k}={x}" for k, x in v.items()))
+        elif isinstance(v, float) and name.startswith("rescan"):
+            lines.append(f"  {name:28s} {v:.3f}  report only -- near 0.5: the labellable subset looks random in feature space; "
+                         f"high: covariate shift, see rescan_propensity.parquet")
+        elif isinstance(v, float):
             state = "GATE FAILED" if v > PROVENANCE_PROBE_MAX_AUC else "ok"
             lines.append(f"  {name:28s} {v:.3f}  {state}")
             if state == "GATE FAILED":
