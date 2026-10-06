@@ -255,5 +255,16 @@ confidence bands is the finding.
 
 ## Running
 
-`make all` runs 01–08 and deliberately stops. Stage 09 is invoked by hand, once, after
-the model, calibrator and combiner are all frozen — see [`05-evaluation.md`](./05-evaluation.md).
+Every stage is a `make` target (`make help` lists them with the run's settings). The
+extraction targets — `pe-gate`, `survey`, `base` — need the Postgres tunnel and
+`kubectl`; the run targets — `draw`, `compose`, `label`, `features`, `split`,
+`baselines`, `train`, `calibrate` — read only local files, and `make all` runs them in
+order from an existing base. `make rehearsal` is the stage run of 2026-10-05 start to
+finish. Both deliberately stop before stage 09: `make evaluate` is invoked by hand, once,
+after the model, calibrator and combiner are all frozen — see
+[`05-evaluation.md`](./05-evaluation.md). The run is named by `POLYSCORE_RUN_ID`,
+`POLYSCORE_COHORT_SIZE`, `POLYSCORE_RANDOM_SEED` and `POLYSCORE_BASE_SNAPSHOT`;
+`BASELINES_FLAGS`, `CALIBRATE_FLAGS` and `OVERWRITE` carry the flags the stages explain.
+Measured 2026-10-06: a second run id from the same base reproduces the first byte for
+byte, which is the §11 determinism check through the other front door. The README's
+*Running the pipeline* has the variable table.

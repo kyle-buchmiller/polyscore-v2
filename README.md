@@ -125,19 +125,63 @@ make lock                       # uv pip compile pyproject.toml -o requirements.
 ## Running the pipeline
 
 Each stage reads the previous stage's output and writes its own, so any stage can
-be re-run without redoing the ones before it.
+be re-run without redoing the ones before it. Every stage is a `make` target, and
+`make help` prints them with the run's current settings. The targets fall into two
+groups: **extraction**, which needs the Postgres tunnel and `kubectl`, and **the
+run**, which reads only local files.
 
 ```bash
-make extract     # 01 — pull the cohort, freeze a snapshot
-make compose     # 02 — print the composition table, then READ IT
-make label       # 03 — attach the answer column (needs the horizon to have elapsed)
-make features    # 04 — build the feature matrix, as-of enforced
-make split       # 05 — temporal + family-grouped split
-make baselines   # 06 — the four baselines, BEFORE any model
-make train       # 07 — three comparisons
-make calibrate   # 08 — fit the calibrator and combiner (fits; changes the model)
-make evaluate    # 09 — open the test set, once (measures; fits nothing)
+# extraction (tunnel open, kubectl pointed at $KUBE_CONTEXT)
+make pe-gate     # step 1 — the confirmed-PE hash list from OpenSearch, inside the CLI pod
+make survey      # step 2 — the survey over a SAMPLE_PCT sample of artifacts; pulls nothing
+make base        # step 3 — 01a: the base pull, feeds in, PE gate on — rare, heavy, resumable
+
+# the run — local only, from an existing base
+make compose     # step 4 — the composition table of the base (RUN=<id> adds a run's)
+make draw        # step 5 — 01b: the stratified, seeded draw; pi recorded; never touches the database
+make label       # step 6 — attach the answer column
+make features    # step 7 — the feature matrix (and the control sample's)
+make split       # step 8 — temporal + family-grouped split, plus the random variant
+make baselines   # step 9 — the four baselines and the probes (BASELINES_FLAGS=--no-gate to report, not exit)
+make train       # step 10 — the three comparisons, tuned on validate
+make calibrate   # step 11 — the calibrator and combiner (CALIBRATE_FLAGS=--provisional until grade-3 labels)
+make evaluate    # step 12 — open the test set, once; deliberately NOT part of `all`
+
+make all         # draw … calibrate: one run end to end from an existing base
+make rehearsal   # pe-gate survey base compose all: the stage run of 2026-10-05, start to finish
 ```
+
+The run is named by four environment variables every stage from 01b on reads, and
+the extraction by a handful of make variables; all have the stage rehearsal's values
+as defaults and are overridden on the command line:
+
+| Variable | Default | Names |
+|---|---|---|
+| `POLYSCORE_RUN_ID` | `stage-a` | the directory under `data/runs/` everything a run writes goes to |
+| `POLYSCORE_COHORT_SIZE` | `10000` | **the** scaling knob — 10k or 1M, nothing else changes |
+| `POLYSCORE_RANDOM_SEED` | `1` | same base + same seed ⇒ byte-identical run |
+| `POLYSCORE_BASE_SNAPSHOT` | `data/base/<window>.parquet` | which base the run draws from |
+| `WINDOW_START` / `WINDOW_END` | `2024-01-01` / `2026-09-01` | the extraction window |
+| `HORIZON_MAX` | `1000` | the label-gap bound; read off the survey's `gap_p90` on prod |
+| `SAMPLE_PCT` | `10` | the survey's artifact sample |
+| `ENV`, `KUBE_CONTEXT` | `stage`, `us-stage-blue` | the PE gate file's name, and where `pe-gate` runs |
+| `BASELINES_FLAGS`, `CALIBRATE_FLAGS`, `OVERWRITE` | `""`, `--provisional`, `""` | the flags the stages explain |
+
+```bash
+make all BASELINES_FLAGS=--no-gate POLYSCORE_RUN_ID=stage-b     # a second run from the same base
+make evaluate POLYSCORE_RUN_ID=stage-b
+```
+
+Two things worth knowing. **Outputs are written once**: a target re-run over an
+existing output refuses, and `OVERWRITE=--overwrite` is the deliberate exception.
+And **it is the same output, not a similar one**: on 2026-10-06, `make all` +
+`make evaluate` into `stage-b` reproduced the hand-run `stage-a` byte for byte — every
+parquet identical by content hash, every report identical once run id and timestamp
+are set aside. That is estimand §11's determinism check, and `make` is only another
+way to type the commands. The hand-run form, with what each step does and how to tell
+it worked, is step by step in
+[`specs/09-extraction-runbook.md`](./specs/09-extraction-runbook.md) and in the pilot
+write-up's *Sample stage rehearsal* section.
 
 Stage 06 is the most informative half hour in the project. If the
 malicious-engine-count baseline comes back above ~0.97 AUC, the labels are a
