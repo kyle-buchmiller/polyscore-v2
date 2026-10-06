@@ -28,7 +28,8 @@
 \set horizon_max_days 90      -- SET FROM 01_survey's gap_p90. Provisional.
 
 WITH scoped AS (
-    SELECT ai.number, ai.sha256, ai.completed, ai.scan_config
+    SELECT ai.number, ai.sha256, ai.completed, ai.scan_config,
+           ai.polyscore                 -- the incumbent's output for THIS scan: baseline 4, never a feature
       FROM artifactinstance ai
      WHERE ai.meta_community = '_public'
        AND ai.artifact_type  = 'FILE'
@@ -56,7 +57,7 @@ first_ever AS (
 feature_scan AS (
     SELECT DISTINCT ON (s.sha256)
            s.sha256, s.number AS instance_number, s.completed AS scoring_moment,
-           s.scan_config
+           s.scan_config, s.polyscore
       FROM scoped s
       JOIN first_ever f ON f.sha256 = s.sha256 AND f.first_reveal = s.completed
      WHERE f.first_reveal >= :'window_start'::timestamp
@@ -98,7 +99,8 @@ SELECT fs.sha256,
        v.n_malicious,
        v.n_responded,
        fs.scan_config,
-       CASE WHEN fs.scan_config = 'feed' THEN 'feed' ELSE 'customer' END AS provenance
+       CASE WHEN fs.scan_config = 'feed' THEN 'feed' ELSE 'customer' END AS provenance,
+       fs.polyscore AS incumbent_polyscore
   FROM feature_scan fs
   JOIN label_scan l ON l.sha256 = fs.sha256       -- INNER: no natural label, not in the base
   JOIN verdicts   v ON v.sha256 = fs.sha256
