@@ -26,6 +26,12 @@ WITH scoped AS (
        AND ai.completed IS NOT NULL               -- revealed; NOT window_closed
        AND ai.failed IS NOT TRUE
        AND ai.state::text <> 'KNOWN_GOOD'
+       -- A SCAN has assertions. A completed instance with none is an ingestion record --
+       -- measured on stage 2026-10-05: feed rows with result = TRUE, quorum_mask = TRUE,
+       -- completed ~30 s after created, and zero assertion rows, ~23% of revealed
+       -- artifacts. They carry a verdict by provenance, not by engines, and are neither
+       -- a T scan nor a label scan here.
+       AND EXISTS (SELECT 1 FROM assertions x WHERE x.instance_id = ai.number)
        -- NO feed exclusion (decision 0010 / SS10): scan_config is carried as provenance.
        AND COALESCE(ai.actions->>'scan', ai.actions->>'_default', 'true')::boolean
        AND ai.mimetype IN ('application/x-dosexec',
@@ -45,5 +51,6 @@ SELECT DISTINCT ON (s.sha256)
                      FROM artifactinstance e
                     WHERE e.sha256 = s.sha256
                       AND e.completed IS NOT NULL AND e.failed IS NOT TRUE
-                      AND e.completed < s.completed)
+                      AND e.completed < s.completed
+                      AND EXISTS (SELECT 1 FROM assertions x WHERE x.instance_id = e.number))
  ORDER BY s.sha256, s.completed, s.number;      -- deterministic on a reveal-time tie

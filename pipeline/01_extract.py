@@ -182,9 +182,12 @@ def main() -> None:
     variables = {"window_start": args.window_start, "window_end": args.window_end,
                  "horizon_days": settings.horizon_days, "horizon_max_days": args.horizon_max_days,
                  "sample_pct": args.sample_pct, "slack_days": args.slack_days}
-    cache_dir = settings.path("base", ".cache", f"{window}_p{args.sample_pct}_h{args.horizon_max_days}")
-    cache_dir.mkdir(parents=True, exist_ok=True)
     sql = {name: (SQL / name).read_text() for name in QUERY_FILES}
+    # The cache is keyed by the query hash as well as the parameters, so a changed SQL file
+    # can never silently replay chunks the old one produced.
+    qhash = query_sha256(SQL, QUERY_FILES, variables)[:12]
+    cache_dir = settings.path("base", ".cache", f"{window}_p{args.sample_pct}_h{args.horizon_max_days}_{qhash}")
+    cache_dir.mkdir(parents=True, exist_ok=True)
 
     with psycopg.connect(dsn_from_env(), connect_timeout=15) as conn:
         conn.read_only = True

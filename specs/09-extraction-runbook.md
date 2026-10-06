@@ -776,6 +776,7 @@ rather than the whole candidate pool — which is the main reason the draw comes
 | `query parameter missing: name` | psycopg parses placeholder-shaped text anywhere in the file, comments included. Never write the `%(…)s` form in a comment |
 | `server closed the connection unexpectedly` mid-run | the port-forward reached its lifetime (2 h here). Reopen it and rerun the same command; the chunk cache resumes where it stopped |
 | A full index scroll comes back short, exit 0 | search backpressure cancelled a shard task; `03_pe_confirm.py` now fails the page and retries smaller (step 3) |
+| Most labels come out `undecidable / no_label_scan_assertions` | the label scan was a completed instance with no assertions — an ingestion record, not a scan (`02-data.md`). The chunk SQL requires `EXISTS (assertions)` for every scan it names; if this reappears, that requirement was removed |
 
 ---
 

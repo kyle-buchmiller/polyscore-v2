@@ -27,6 +27,7 @@ label_scan AS (
        AND ai.completed >= fs.scoring_moment + make_interval(days => %(horizon_days)s)
        AND ai.completed <  fs.scoring_moment + make_interval(days => %(horizon_max_days)s)
      WHERE ai.completed IS NOT NULL AND ai.failed IS NOT TRUE
+       AND EXISTS (SELECT 1 FROM assertions x WHERE x.instance_id = ai.number)   -- a scan, not an ingestion record
      ORDER BY fs.sha256, ai.completed ASC
 ),
 verdicts AS (
