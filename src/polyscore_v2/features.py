@@ -221,7 +221,11 @@ def build_matrix(
     feature_new = list(new.columns) + [c for c in agg.columns] + FAMILY_FEATURES
     feature_old = list(old.columns)
     static_cols: list[str] = []
-    parts = [cohort.set_index("sha256"), new, old, agg, fam]
+    # The base's counts at T were only needed for the assertion above; the aggregates are
+    # the same numbers recomputed from the assertions, and they are the features.
+    cohort_part = cohort.set_index("sha256").drop(
+        columns=[c for c in ("n_definite", "n_malicious", "n_responded") if c in cohort.columns])
+    parts = [cohort_part, new, old, agg, fam]
     if static_block is not None:
         sb = static_block.set_index("sha256").reindex(artifacts)
         if "pe_as_of" not in sb.columns:
@@ -233,6 +237,9 @@ def build_matrix(
         parts.append(sb[static_cols])
         feature_new += static_cols
     matrix = pd.concat(parts, axis=1).reset_index()
+    dup = matrix.columns[matrix.columns.duplicated()].tolist()
+    if dup:
+        raise ValueError(f"duplicate feature columns: {dup}")
 
     bookkeeping = sorted(BOOKKEEPING_NOT_FEATURES & set(matrix.columns))
     meta = [c for c in META_COLUMNS if c in matrix.columns]
