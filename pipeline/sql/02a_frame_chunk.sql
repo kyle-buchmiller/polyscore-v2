@@ -28,7 +28,7 @@ WITH scoped AS (
        AND ai.state::text <> 'KNOWN_GOOD'
        -- A SCAN has assertions. A completed instance with none is an ingestion record --
        -- measured on stage 2026-10-05: feed rows with result = TRUE, quorum_mask = TRUE,
-       -- completed ~30 s after created, and zero assertion rows, ~23% of revealed
+       -- completed ~30 s after created, and zero assertion rows, about 23 percent of revealed
        -- artifacts. They carry a verdict by provenance, not by engines, and are neither
        -- a T scan nor a label scan here.
        AND EXISTS (SELECT 1 FROM assertions x WHERE x.instance_id = ai.number)
