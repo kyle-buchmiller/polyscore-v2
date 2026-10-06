@@ -129,10 +129,14 @@ only access.
   over *all time* also needs either an index that serves `(sha256, completed)` or a bounded
   lookback — and a lookback is a semantic change to "first sighting" that must be written
   down before it is coded.
-- **Stage cannot speak to §1 at all.** Its `default` traffic is 1.13M never-completed
-  instances over 68k artifacts with 2,681 ever revealed — the same test hashes stored over
-  and over. Stage rehearses every mechanical step of the §10 pipeline and nothing about the
-  customer population, calibration, or the validation arm's selection question.
+- **Stage cannot speak to §1 at all — and barely to §10.** Its `default` traffic is 1.13M
+  never-completed instances over 68k artifacts with 2,681 ever revealed — the same test
+  hashes stored over and over — and its feeds are scanned once and never again: the full
+  chunked pull found **32 labellable artifacts in 679,053** (19 customer, 13 feed). Stage
+  rehearses every mechanical step of the pipeline, which it now has (01a → 09 on that
+  base, 2026-10-05), and nothing about the customer population, calibration, the
+  validation arm's selection question, or any number worth quoting. The first real
+  numbers are prod's.
 - **A rehearsal base can be stale in a way nothing flags.** The 25-row stage base predated
   decision 0010 and carried `pe_gate: skipped-REHEARSAL`; the draw, the stability runs and
   `02_compose` all ran happily on it. **Closed the same day:** `sql.base_query_drift`

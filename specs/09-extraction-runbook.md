@@ -522,9 +522,18 @@ at 1.2M artifacts: a 30-minute statement timeout, then a 78-minute port-forward.
 | `02b_label_chunk.sql` | 5,000 frame rows, carried in as `unnest()` arrays | the nearest natural later scan in bound and the verdict counts at T; rows with none are **unlabellable** |
 | `03_assertions_pull.sql` | 5,000 instance numbers | step 5 |
 
-Every chunk is cached under `data/base/.cache/<window>_p<pct>_h<bound>/`; a run killed
-by a tunnel's lifetime re-runs and picks up where it stopped (`--no-cache` to refuse the
-cache). No statement is near a timeout.
+Every chunk is cached under `data/base/.cache/<window>_p<pct>_h<bound>_<queryhash>/`; a
+run killed by a tunnel's lifetime re-runs and picks up where it stopped (`--no-cache` to
+refuse the cache). No statement is near a timeout.
+
+> **Stage, 2026-10-05, the full window at 100%:** frame **680,322** artifacts in 981
+> daily chunks (13.6 min; empty days 0.1 s); PE gate → **679,053**; 136 label chunks
+> (25–33 min — 82 s cold, 0.9 s warm per 5,000) → **32 labellable** (19 customer,
+> 13 feed); 950 assertion rows; control sample 10,000. Thirty-nine minutes end to end,
+> against a one-statement form that never finished. The 32 is the finding about stage:
+> its feeds are scanned once and never again, so the §10 population adds thirteen
+> artifacts to the customer handful. Every later stage ran on it; the numbers they print
+> are mechanics at n = 32, not a model.
 
 > **Why this is a Python stage and not a `psql -f`.** The replica is a **hot standby**
 > (`pg_is_in_recovery() = true`) and refuses `CREATE TEMP TABLE` outright — measured
