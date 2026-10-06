@@ -7,7 +7,7 @@ workstation reaches for. This runner understands that same subset so the files
 stay single-source: identical text runs under psql and under this.
 
     .venv/bin/python pipeline/run_sql.py pipeline/sql/00_verify.sql
-    .venv/bin/python pipeline/run_sql.py pipeline/sql/01_survey.sql --set window_start=2026-09-08
+    .venv/bin/python pipeline/run_sql.py pipeline/sql/b01_survey.sql --set window_start=2026-09-08
 
 Read-only by construction: it opens a read-only transaction and sets a
 statement timeout, so a runaway query on a shared replica cannot sit there.
@@ -67,6 +67,11 @@ def main() -> None:
                     # a timed-out survey that exits 0 reads as "done" to whatever called it.
                     print(f"!! FAILED: {type(exc).__name__}: {exc}", file=sys.stderr, flush=True)
                     failed += 1
+                    if conn.closed or conn.broken:
+                        # The replica (or the port-forward under it) went away: nothing left to
+                        # roll back, and nothing after this can run. Measured 2026-10-05 when the
+                        # tunnel hit its lifetime 78 minutes into a survey.
+                        sys.exit(f"connection lost after {n - 1} statement(s); {failed} failed")
                     conn.rollback()
     if failed:
         sys.exit(f"{failed} of {len(statements)} statement(s) failed")

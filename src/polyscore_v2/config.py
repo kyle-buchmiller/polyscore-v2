@@ -118,7 +118,7 @@ class Settings(BaseSettings):
     #: Which base snapshot a run draws from. A run never touches the database -- that
     #: is what makes it quick, concurrent, and reproducible. Set to the base's path.
     base_snapshot: Path | None = None
-    #: A base pulled by an older 02_base_pull.sql is refused by 01b_draw unless this is
+    #: A base pulled by older extraction SQL is refused by 01b_draw unless this is
     #: set. The 25-row stage rehearsal base ran through five stability runs and stage 02
     #: after decision 0010 had changed the population under it, and nothing said so.
     allow_stale_base: bool = False
@@ -133,6 +133,9 @@ class Settings(BaseSettings):
     #: question -- does a model trained on selected natural rescans hold on unselected
     #: forced ones -- and waits 30 days once.
     validation_size: int = 2_000
+    #: The control sample 01a sets aside for the rescan probe (estimand SS4): a seeded draw
+    #: of frame artifacts with NO natural later scan, T assertions only, never trained on.
+    control_size: int = 10_000
 
     # --- estimand SS5: split ------------------------------------------------
     train_frac: float = 0.60

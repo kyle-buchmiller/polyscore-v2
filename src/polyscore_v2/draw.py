@@ -64,7 +64,7 @@ def assign_stratum(
 def _permutation_key(sha256: pd.Series, seed: int) -> pd.Series:
     """A deterministic pseudo-random order keyed by (sha256, seed).
 
-    md5(sha256 || seed), the same construction 02_base_pull's predecessor used in SQL,
+    md5(sha256 || seed), the same construction the first base pull used in SQL,
     so a draw is reproducible from the seed alone and never depends on process state
     the way a seeded RNG consumed in a different order would.
     """

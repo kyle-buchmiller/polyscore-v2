@@ -45,7 +45,7 @@ def main() -> None:
 
     # The base is only as current as the query that pulled it, and nothing downstream can
     # tell: the stage rehearsal base predated decision 0010 and drew without complaint.
-    drift = base_query_drift(base_manifest, SQL / "02_base_pull.sql")
+    drift = base_query_drift(base_manifest, SQL)
     if drift and not settings.allow_stale_base:
         raise SystemExit(drift)
     if drift:

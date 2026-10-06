@@ -54,19 +54,36 @@ its output.
 
 **01 · extract — two tiers** ([`0010`](../decisions/0010-natural-rescans-for-training-forced-for-validation.md)).
 
-*01a · base pull.* Query Postgres for every eligible PE artifact in the date window —
-estimand **§10**'s population, feeds included — **that already has a natural later scan**
-inside `[horizon_days, horizon_max_days]`, with both scans' assertions. **No sampling**:
-`π_base = 1`. Deterministic `ORDER BY` before any limit. This is the heavy query and the
-reproducibility unit; it runs rarely. `engine_metadata` is **projected** to
-`malware_family` plus a fixed short list, never pulled whole — at 1M artifacts the full
-JSONB is tens of gigabytes.
+*01a · base pull.* Every eligible PE artifact in the date window — estimand **§10**'s
+population, feeds included — **that already has a natural later scan** inside
+`[horizon_days, horizon_max_days]`, with both scans' assertions. **No sampling**:
+`π_base = 1`. This is the reproducibility unit; it runs rarely. `engine_metadata` is
+**projected** to `malware_family` plus a fixed short list, never pulled whole — at 1M
+artifacts the full JSONB is tens of gigabytes.
 
-*01a also sets aside a control sample* — **not yet implemented**. A seeded random
-`POLYSCORE_CONTROL_SIZE` (default 10k) of eligible artifacts that have **no** natural later
-scan in bound, with the T scan's assertions only and no label, written to
-`data/base/<window>.control.parquet`. It exists for stage 06's rescan probe and the
-optional propensity weight (estimand §4) and never enters a run draw.
+**It is chunked, because the one-statement form does not scale** (measured on stage
+2026-10-05: a 30-minute statement timeout, then a 78-minute port-forward, on 1.2M
+artifacts). Three kinds of small statement, each resumable from `data/base/.cache/`:
+the **frame** (`02a_frame_chunk.sql`, one statement per week of `created`, which is
+indexed where `completed` is not; an anti-join finds the first-ever reveal), the
+**labels** (`02b_label_chunk.sql`, one statement per 5,000 frame rows carried in as
+`unnest()` arrays: the nearest later scan in bound and the verdict counts at T), and the
+**assertions** (`03_assertions_pull.sql`, as before). The PE gate is applied to the frame
+before the label chunks. The manifest's `query_sha256` covers the three files and the
+variables, and `01b_draw` refuses a base that was pulled by different ones.
+
+*The survey is a mode of the same script.* `--sample-pct 10 --survey` walks the frame and
+label chunks over a deterministic 10% of artifacts (`hashtext(sha256)`), prints the band
+histogram, gaps, coverage and the §1 share, writes the sampled frame, and stops before any
+assertion is pulled. `01_survey.sql` is retired in its favour: shares and percentiles are
+as good from a sample, and one extraction code path cannot disagree with itself.
+
+*01a also sets aside the control sample.* A seeded `POLYSCORE_CONTROL_SIZE` (default 10k)
+of frame artifacts that have **no** natural later scan in bound, with the T scan's
+assertions only and no label, written beside the base as `<window>.control.parquet` with
+its own manifest (`control_pi` = the fraction of unlabellable rows it took). It exists for
+stage 06's rescan probe and the optional propensity weight (estimand §4) and never enters
+a run draw.
 
 *01b · run draw.* From the base Parquet, **locally**, draw `cohort_size` artifacts
 stratified per §9 with `random_seed`, recording `π_draw` per row. Never touches the
@@ -74,8 +91,8 @@ database. Writes under `data/runs/<run_id>/`. This is what makes scaling a varia
 change, retraining quick, and concurrent runs free — and it is the only form under which
 "same base, same seed, same cohort" is a true sentence. Before drawing it **verifies the
 base against the query on disk**: the manifest's `query_sha256` is the hash of
-`02_base_pull.sql` rendered with the base's recorded variables, so a base pulled by an
-older query is refused with the reason unless `POLYSCORE_ALLOW_STALE_BASE=1`. The stage
+the three extraction SQL files plus the base's recorded variables, so a base pulled by
+older ones is refused with the reason unless `POLYSCORE_ALLOW_STALE_BASE=1`. The stage
 rehearsal base predated decision 0010 and drew without complaint, which is why.
 
 *01c · validation tranche.* Separately and once: draw `validation_size` artifacts **blind

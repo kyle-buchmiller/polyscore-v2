@@ -109,7 +109,10 @@ only access.
 
 ## Surfaced on stage, 2026-10-05
 
-- **The monolithic base pull does not scale, and the survey only does because it samples.**
+- **Closed the same day — the base pull is chunked** (`02a_frame_chunk.sql` per week of
+  `created`, `02b_label_chunk.sql` per 5,000 artifacts via `unnest()`, resumable from a
+  cache; the survey is `01_extract.py --sample-pct N --survey`). What was found:
+  **The monolithic base pull does not scale, and the survey only does because it samples.**
   The feeds-in survey over the stage window (1.22M revealed-with-assertions artifacts) blew
   a 30-minute statement timeout. `EXPLAIN` says why: `first_ever` is a second full
   sequential scan of `artifactinstance` hash-joined to all of `scoped`, aggregated through

@@ -344,19 +344,27 @@ psql "$PSQL_URI" -f pipeline/sql/00_verify.sql | tee data/reports/verify.txt
 ```
 
 It is an input to *decisions*, not to code: its answers get hand-carried into the filters in
-`01_survey.sql` / `02_base_pull.sql` and, where they change one, into `decisions/`.
+`02a_frame_chunk.sql` / `02b_label_chunk.sql` and, where they change one, into `decisions/`.
 
 **Done when** all six returned and none surprised you. A surprise is a stop, not a note.
 
 ---
 
-## Step 2 · Survey — `pipeline/sql/01_survey.sql` ← **the decision point**
+## Step 2 · Survey — `01_extract.py --sample-pct 10 --survey` ← **the decision point**
 
 ```bash
-psql "$PSQL_URI" -f pipeline/sql/01_survey.sql | tee data/reports/survey.txt
+.venv/bin/python pipeline/01_extract.py \
+  --window-start 2026-09-08 --window-end 2026-10-01 \
+  --sample-pct 10 --survey --horizon-max-days 365     # a wide bound: the survey is what sets it
 ```
 
-**Expect:** minutes, not seconds — it aggregates over `assertions`. One row per stratum.
+**Expect:** minutes. It walks the same frame and label chunks step 4 will, over a
+deterministic 10% of artifacts (`hashtext(sha256)`), prints the table below, writes the
+sampled frame to `data/base/<window>.sample10.frame.parquet`, and stops before any
+assertion is pulled. Shares and percentiles are as good from 10% as from all; counts
+scale by 100/pct and the report says so. (`01_survey.sql` is retired: a separate
+aggregate query over the whole population blew a 30-minute statement timeout on stage,
+and one extraction code path cannot disagree with itself.)
 
 **This step draws nothing, and that is deliberate.** It exists so the two assumptions most
 likely to be wrong get tested before anybody spends a download on them:
@@ -372,7 +380,7 @@ likely to be wrong get tested before anybody spends a download on them:
 `decisions/`, per `99-open-questions.md`. If total `labellable` is far below the cohort
 size, widen the window forward or lower the cohort size and say so. **Do not drop feeds to
 make the bands look like §1**: the survey counts the §10 population (feeds in, decision
-0010) with the same filters as `02_base_pull.sql`, so the two row counts can agree, and
+0010) with the same filters as the base pull — it *is* the base pull's frame — so the two row counts can agree, and
 the `customer_*` columns are the §1 subset. Thinness *there* bounds what calibration can
 claim, not what training can use.
 
@@ -385,16 +393,19 @@ claim, not what training can use.
 > stored over and over. The 25-row stage base on disk predates the fix (`pe_gate:
 > skipped-REHEARSAL`) and is rehearsal-only.
 
-**Produces:** `data/reports/survey.txt` — one row per stratum, six or seven rows total.
+**Produces:** `data/reports/survey_<window>_p<pct>.txt` — a header with the frame,
+labellable and customer counts, then one row per stratum of the labellable rows.
 
 | Column | Meaning |
 |---|---|
-| `stratum` | the six §9 bands plus `below_floor` |
-| `artifacts` | candidates in that band |
-| `labellable` | **the real base size** — those with a T+30 scan |
-| `customer_artifacts`, `customer_labellable` | the §1 subset of each — what stage 08 calibrates on and the headline is sliced to |
-| `pct_of_labellable` | compare against §9's targets: 45 / 15 / 15 / 10 / 10 |
-| `avg_definite_verdicts`, `avg_responded` | sanity check on engine coverage per band |
+| header `frame` | artifacts whose first-ever reveal is in the window (the sample's) |
+| header `labellable` / `customer labellable` | **the real base size**, and its §1 subset — what stage 08 calibrates on and the headline is sliced to |
+| `stratum` | the five drawn §9 bands plus `below_floor` |
+| `labellable`, `share_%`, `target_%` | per band, against §9's 45 / 15 / 15 / 10 / 10 |
+| `gap_p50`, `gap_p90`, `gap_max` | the realized T → label gap in days — **`horizon_max_days` is read off `gap_p90`** |
+| `def_min`, `def_p10`, `def_med` | answering-engine coverage per band — what the floor is set against |
+| `customer` | §1 rows in the band |
+| `fills_up_to` | the largest cohort this band can fill at its share; the smallest bounds the draw |
 
 Human-read, like step 1 — nothing downstream parses it. Its output is a **go/no-go plus
 possibly a revised band definition**, and a revision is recorded in `decisions/` before
@@ -486,28 +497,44 @@ the SQL window, or — as on stage — the index holds far more *stored* PE than
 
 ---
 
-## Step 4 · Base pull — `pipeline/sql/02_base_pull.sql`  *(tier one)*
+## Step 4 · Base pull — `01_extract.py` (`02a_frame_chunk.sql` + `02b_label_chunk.sql`)  *(tier one)*
 
 **No sampling happens here.** This pulls **every** eligible artifact in the window that
 already has a natural later scan inside `[horizon_days, horizon_max_days]`, with the
-counts needed to band it. `π_base = 1`. It is the heavy query, it runs rarely, and it is
-the reproducibility unit everything else keys on.
+counts needed to band it. `π_base = 1`. It runs rarely, and it is the reproducibility
+unit everything else keys on.
 
 ```bash
 .venv/bin/python pipeline/01_extract.py \
   --window-start 2026-09-08 --window-end 2026-10-01 \
   --horizon-max-days 90 \
-  --pe-confirmed data/snapshots/pe_confirmed.txt
+  --pe-confirmed data/pe_confirmed/prod_2026-09-08_2026-10-01.txt
 ```
+
+**It is chunked, and it resumes.** The one-statement form was a second full scan of
+`artifactinstance` hash-joined to the whole frame through a disk-spilling aggregate, with
+every per-artifact step a nested loop over the population — measured on stage 2026-10-05
+at 1.2M artifacts: a 30-minute statement timeout, then a 78-minute port-forward. Now:
+
+| Statement | Once per | What it does |
+|---|---|---|
+| `02a_frame_chunk.sql` | week of `created` (`--chunk-days`), from `window_start − --slack-days` | every artifact whose **first-ever** reveal is in the window, with its T scan. `created` is indexed where `completed` is not, and `completed ≥ created` always; an anti-join on `ix_artifactinstance_sha256` finds "first ever" |
+| `02b_label_chunk.sql` | 5,000 frame rows, carried in as `unnest()` arrays | the nearest natural later scan in bound and the verdict counts at T; rows with none are **unlabellable** |
+| `03_assertions_pull.sql` | 5,000 instance numbers | step 5 |
+
+Every chunk is cached under `data/base/.cache/<window>_p<pct>_h<bound>/`; a run killed
+by a tunnel's lifetime re-runs and picks up where it stopped (`--no-cache` to refuse the
+cache). No statement is near a timeout.
 
 > **Why this is a Python stage and not a `psql -f`.** The replica is a **hot standby**
 > (`pg_is_in_recovery() = true`) and refuses `CREATE TEMP TABLE` outright — measured
 > 2026-10-01 on stage, and prod's reader endpoint is the same kind of thing. So the
-> confirmed-PE set cannot be joined in SQL. `01_extract.py` runs `02_base_pull.sql`
-> ungated, then applies the confirmed set **in pandas before the base is written** — so
-> the base Parquet is still exactly the confirmed-PE population and the run draw's `π` is
-> still computed over confirmed-PE band populations. `psql` remains the right tool for
-> steps 1–2, which are single read-only queries.
+> confirmed-PE set cannot be joined in SQL. `01_extract.py` walks the frame chunks
+> ungated, applies the confirmed set **in pandas between the frame and the label chunks**
+> (less work, and the base Parquet is exactly the confirmed-PE population, so the run
+> draw's `π` is over confirmed-PE band populations). The keys for the label and assertion
+> chunks ride in as array parameters for the same reason. `psql` remains the right tool
+> for step 1, a single read-only query.
 
 For a stage rehearsal where the CLI pod is unreachable, `--no-pe-gate` skips the filter;
 the manifest records `pe_gate: skipped-REHEARSAL` and such a base is never trained on.
@@ -516,11 +543,15 @@ the manifest records `pe_gate: skipped-REHEARSAL` and such a base is never train
 natural gaps ran 92 days median for contested and 218 for consensus-clean; the bound is
 doing real work and a wrong one silently changes the population.
 
-**Produces:** `data/base/<window>.parquet` with a manifest carrying the query hash,
-window, bound, PE-gate mode, row count and **content hash** — and, from the same run,
-`data/base/<window>.assertions.parquet` (step 5 happens inside the same invocation). That
-hash goes into every run manifest, which is how "which base did this model come from" is
-always answerable.
+**Produces:** `data/base/<window>.parquet` with a manifest carrying the query hash (over
+the three SQL files **and** the variables — `01b_draw` refuses a base pulled by different
+ones), window, bound, PE-gate mode, the frame / after-gate / labellable / unlabellable
+counts and the **content hash** — and, from the same run, `<window>.assertions.parquet`
+(step 5) and the **control sample**: `<window>.control.parquet` (+ manifest, with
+`control_pi`) and `<window>.control.assertions.parquet`, a seeded `--control-size`
+(default 10k) of unlabellable artifacts with their T assertions, for stage 06's rescan
+probe and never for training. The content hash goes into every run manifest, which is
+how "which base did this model come from" is always answerable.
 
 | Column | Note |
 |---|---|
@@ -528,9 +559,11 @@ always answerable.
 | `label_instance_number`, `label_moment`, `label_gap` | the natural label scan |
 | `n_definite`, `n_malicious`, `n_responded` | **the band inputs** — stratum is computed at draw time, not here, so band edges can be revised without a re-pull |
 | `scan_config`, `provenance` | carried, not filtered: `feed` / `customer`. **The base is the §10 training population, feeds included**; stage 08 narrows to §1. Measured in Discover 2026-10-05: 25.3M public PE in 24 days, visibly feed-dominated |
+| `incumbent_polyscore` | the incumbent's output for the T scan — baseline 4, denied as a feature |
 
-**Done when** the row count agrees with step 2's `labellable`. A gap means the bound or
-the PE confirmation moved the population.
+**Done when** the manifest's `labellable_rows` agrees with step 2's labellable count
+scaled by 100/pct (the survey ran before the PE gate; the gap is the gate's work), and
+the row count equals `labellable_rows`.
 
 ---
 
@@ -548,11 +581,13 @@ rather than materializing 30M rows at once.
 `engine_metadata` is **projected** — `malware_family` and a short named list — never
 pulled whole. Every added field is multiplied by ~30M rows.
 
-**Produces:** `data/base/assertions.parquet` — one row per `(sha256, scan_role, author)`.
-The 4th engine state (never responded) is the *absence* of a row and is reconstructed in
-stage 04 against the roster at T.
+**Produces:** `data/base/<window>.assertions.parquet` — one row per `(sha256, scan_role,
+author)` — and `<window>.control.assertions.parquet`, the control sample's T scans
+(`scan_role = 'feature'` only). The 4th engine state (never responded) is the *absence*
+of a row and is reconstructed in stage 04 against the roster at T.
 
-**Done when** the distinct `instance_number` count equals twice the base's artifact count.
+**Done when** the distinct `instance_number` count equals twice the base's artifact count,
+and the control file's equals the control sample's.
 
 ---
 
@@ -758,7 +793,7 @@ Two uses here:
   faster than querying Postgres for the new instance rows.
 
 **For the §1 window itself the counter is blind** — it did not exist. That rescan rate
-still comes from `01_survey.sql` once the port-forward is possible.
+still comes from `01_extract.py --sample-pct 10 --survey` once the port-forward is possible.
 
 ---
 

@@ -190,13 +190,13 @@ cannot be seen. It can only be **bounded empirically**, which is the validation 
 > [`99-open-questions.md`](./99-open-questions.md).
 
 **What the base does and does not contain.** The base pull keeps only artifacts that
-*have* a natural label scan in bound (`02_base_pull.sql` inner-joins `label_scan`), so §9's
+*have* a natural label scan in bound (`01_extract.py` keeps only frame rows the label chunk labelled), so §9's
 `π` is the draw's inclusion probability *within the labellable population* — it undoes our
 stratification, not the rescanner's selection. Un-rescanned artifacts appear in two places
-only: `01_survey.sql` counts them per band (`artifacts` against `labellable`, the coarse
+only: the survey (`01_extract.py --survey`) counts them (frame against labellable, the coarse
 per-stratum rescan rate), and a seeded **control sample** of them — T scan and assertions,
-no label, sized by `POLYSCORE_CONTROL_SIZE` (default 10k; the setting and the pull are not
-yet implemented, see stage 01a) — is set aside for the probe below and never enters
+no label, sized by `POLYSCORE_CONTROL_SIZE` (default 10k), written by stage 01a beside the
+base as `<window>.control.parquet` — is set aside for the probe below and never enters
 training. Reweighting a labellable-population estimate to the full population needs a
 second factor, `1 / P(rescanned | X)`, which is what that probe estimates.
 
