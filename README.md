@@ -78,30 +78,60 @@ not expected to produce a deployable model**, and that is not failure: a pilot
 that ends with "the labels are the bottleneck, here is the number that proves it"
 has succeeded completely.
 
+Where it stands, as of 2026-10-07:
+
+- **Every stage exists and has run end to end on stage** (2026-10-05): the chunked
+  base pull over the whole window, a draw, labels, features, the split, baselines,
+  three trained models, a provisional calibrator and the look-once evaluation. The
+  numbers it printed are mechanics, not a model — stage's feeds are scanned once and
+  never again, so the window holds 32 labellable artifacts.
+- **Prod is blocked on one thing**: an EKS access entry for `ReadOnlyProd`, which the
+  Postgres tunnel needs. The PE gate can already go through the Cloudflare door.
+- **The label rule and four other stand-ins are provisional** — engines for clusters,
+  family strings for specificity, no stability check, the modal family as the split
+  group, calibration on grade-1 labels only with `--provisional`
+  ([`0011`](./decisions/0011-provisional-pilot-rules.md), status *Proposed*). The first
+  prod reports are what the real rules get chosen against.
+- **Not built yet, by design and recorded:** a scoring entry point that loads a model and
+  scores a new scan, the static PE block as features, the forced validation tranche, and
+  the ranking number. See [`99-open-questions.md`](./specs/99-open-questions.md).
+
 ## Start here
 
 1. [`AGENTS.md`](./AGENTS.md) — conventions, layout, how to work in this repo.
 2. [`specs/00-overview.md`](./specs/00-overview.md) — what this is and how the pieces fit.
 3. [`specs/01-estimand.md`](./specs/01-estimand.md) — **the frozen decisions.** Read before writing code.
 4. [`specs/06-signals.md`](./specs/06-signals.md) — the signal vocabulary and the combiner contract.
-5. [`decisions/`](./decisions/) — why things are the way they are.
+5. [`specs/09-extraction-runbook.md`](./specs/09-extraction-runbook.md) — how to actually pull the data, step by step, with what each step produces and what can go wrong.
+6. [`decisions/`](./decisions/) — why things are the way they are; [`0011`](./decisions/0011-provisional-pilot-rules.md) is the one currently open for review.
 
-Two diagrams render the pipeline and the serving path: [**Build and Serve**](https://claude.ai/artifact/EHDK37N6ZgJ8EjpHaa5wKZ).
-The specs are authoritative; the diagrams follow them.
+Two write-ups sit beside the specs, as claude.ai pages: [**Build and Serve**](https://claude.ai/artifact/EHDK37N6ZgJ8EjpHaa5wKZ)
+diagrams the pipeline and the serving path, and [**Ten Thousand PE Files**](https://claude.ai/artifact/SgeSQo1qhinicyBzUWpFCp)
+is the pilot runbook for a reader new to all of this — the eleven decisions, what is gathered per
+sample and where it lives, and a copy-paste record of the stage rehearsal. The specs are
+authoritative; both follow them.
 
 ## Layout
 
 ```
-specs/       design contracts — authoritative on intent
-             (07-requests.md: what we need from other teams)
-             (08-future-work.md: what success unlocks later)
-             (09-extraction-runbook.md: how to actually run stage 01)
-             (10/11: Estimand B — the aged-artifact comparison arm, proposed)
-decisions/   dated decision records — authoritative on why
-pipeline/    the nine numbered stages, run in order
-src/         shared code the stages import
-tests/       guards against the failure modes in specs/05
-data/        snapshots and outputs (gitignored)
+specs/          design contracts — authoritative on intent
+                (07-requests.md: what we need from other teams)
+                (08-future-work.md: what success unlocks later)
+                (09-extraction-runbook.md: how to actually pull the data)
+                (10/11: Estimand B — the aged-artifact comparison arm, proposed)
+                (99-open-questions.md: what is known to be unresolved)
+decisions/      dated decision records — authoritative on why
+pipeline/       the stages, run in order: 01_extract (01a, the base pull) and 01b_draw,
+                then 02_compose … 09_evaluate; 03_pe_confirm (the PE gate, from OpenSearch)
+                and run_sql (a psql-free runner for the .sql files)
+pipeline/sql/   the chunked extraction queries (02a frame, 02b labels, 03 assertions),
+                00_verify, and Estimand B's b00/b01
+src/            shared code the stages import — config, labels, features, draw, calibration,
+                modelling, runs, extract, io, sql
+tests/          guards against the failure modes in specs/05, and against the ones the
+                stage rehearsal produced (a rounded instance number, a stale base)
+data/           bases, runs, reports and the PE gate (gitignored; every run under data/runs/<run_id>/)
+Makefile        one target per stage; `make help`
 ```
 
 ## Setup
@@ -111,8 +141,9 @@ repo root created with `uv`, activated by direnv.
 
 ```bash
 sam setup polyscore-v2          # writes .envrc, creates .venv
-uv pip install -e '.[dev]'      # dependencies, editable install
-cp .env.example .env            # then fill in the connection strings
+make setup                      # uv pip install -e '.[dev]'
+cp .env.example .env            # then point POLYSCORE_DB_URI at the replica (runbook, step 0)
+make test                       # the self-checks; expect every test to pass
 ```
 
 `pyproject.toml` is the authoritative dependency list. To refresh the pinned

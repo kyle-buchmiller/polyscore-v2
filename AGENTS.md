@@ -32,7 +32,7 @@ If you own a platform repo and landed here because PolyScore asked you for somet
 | [`specs/01-estimand.md`](./specs/01-estimand.md) | The eleven frozen decisions: reference population, scoring moment, label, horizon, split, metric, baselines, decision rule, sampling design, training population, scale and reproducibility |
 | [`specs/02-data.md`](./specs/02-data.md) | What is collected, from which source, and the as-of rule |
 | [`specs/03-labels.md`](./specs/03-labels.md) | Label taxonomy, grades, and how the pilot's labels are derived |
-| [`specs/04-pipeline.md`](./specs/04-pipeline.md) | The nine stages, their contracts, and what each writes |
+| [`specs/04-pipeline.md`](./specs/04-pipeline.md) | The stages (01a/01b, 02–09), their contracts, what each writes, and the `make` targets |
 | [`specs/05-evaluation.md`](./specs/05-evaluation.md) | Metrics, baselines, the look-once rule, the standing controls |
 | [`specs/06-signals.md`](./specs/06-signals.md) | Signal vocabulary, presence semantics, coverage tiers, and the combiner contract |
 | [`specs/07-requests.md`](./specs/07-requests.md) | Capabilities other teams own that PolyScore needs — outward-facing |
@@ -77,7 +77,8 @@ aggregate — which is where it started. See `specs/06-signals.md`.
 ```
 specs/                   design contracts — authoritative on intent
 decisions/               dated decision records — authoritative on why
-pipeline/01..08_*.py     the numbered stages, runnable, one job each
+pipeline/*.py            the stages, runnable, one job each: 01_extract (01a), 01b_draw, 02…09,
+                         plus 03_pe_confirm (the PE gate) and run_sql; pipeline/sql/ holds the queries
 src/polyscore_v2/        shared code the stages import
 tests/                   guards, not coverage theatre
 data/                    snapshots and outputs (gitignored, reproducible)

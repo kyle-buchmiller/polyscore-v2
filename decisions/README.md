@@ -38,3 +38,4 @@ than one that records being right.
 | [0008](./0008-training-population-is-broader-than-the-reference-population.md) | The training population is broader than the reference population | Accepted |
 | [0009](./0009-a-second-estimand-for-aged-artifacts.md) | A second estimand for aged artifacts, run as a comparison | Accepted |
 | [0010](./0010-natural-rescans-for-training-forced-for-validation.md) | Natural rescans for training, forced rescans for validation; two-tier extraction | Accepted |
+| [0011](./0011-provisional-pilot-rules.md) | The stand-ins that let the pilot run end to end — label rule, split group, calibration on grade-1 labels | Proposed |
