@@ -41,7 +41,8 @@ import pandas as pd
 from polyscore_v2.calibration import Combiner
 from polyscore_v2.config import settings
 from polyscore_v2.logging_setup import configure
-from polyscore_v2.modelling import auc, design, fmt, metrics_table, prob_metrics, raw_score
+from polyscore_v2.metrics import auc, fmt, metrics_table, prob_metrics, reliability
+from polyscore_v2.modelling import design, raw_score
 from polyscore_v2.runs import load_run
 
 log = configure()
@@ -53,41 +54,6 @@ def log_access(run_dir, what: str) -> int:
     with p.open("a") as f:
         f.write(f"{dt.datetime.now(dt.UTC).isoformat()} {what}\n")
     return sum(1 for _ in p.open())
-
-
-def reliability(y, p, w, path, n_bins=10, n_boot=200, seed=0):
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-    rng = np.random.default_rng(seed)
-    n_bins = max(2, min(n_bins, len(y) // 5)) if len(y) >= 10 else 2
-    edges = np.quantile(p, np.linspace(0, 1, n_bins + 1)); edges[0], edges[-1] = 0, 1
-    idx = np.clip(np.searchsorted(edges, p, side="right") - 1, 0, n_bins - 1)
-
-    def curve(sel):
-        xs, ys = [], []
-        for b in range(n_bins):
-            m = (idx[sel] == b)
-            if m.any():
-                ww = w[sel][m]
-                xs.append(np.sum(ww * p[sel][m]) / ww.sum()); ys.append(np.sum(ww * y[sel][m]) / ww.sum())
-        return np.array(xs), np.array(ys)
-
-    x0, y0 = curve(np.arange(len(y)))
-    boots = [curve(rng.integers(0, len(y), len(y)))[1] for _ in range(n_boot)]
-    width = [len(b) for b in boots]
-    k = min(width) if width else 0
-    band = np.array([b[:k] for b in boots]) if k else np.empty((0, 0))
-    lo = np.quantile(band, 0.05, axis=0) if k else []; hi = np.quantile(band, 0.95, axis=0) if k else []
-    fig, ax = plt.subplots(figsize=(5, 5))
-    ax.plot([0, 1], [0, 1], "--", color="grey", lw=1)
-    if k:
-        ax.fill_between(x0[:k], lo, hi, alpha=0.2, label="90% bootstrap band")
-    ax.plot(x0, y0, "o-", label="observed")
-    ax.set_xlabel("predicted probability"); ax.set_ylabel("observed frequency (x 1/pi)")
-    ax.set_title("reliability -- provisional (grade-1 labels)"); ax.legend(loc="upper left")
-    fig.tight_layout(); fig.savefig(path, dpi=120); plt.close(fig)
-    return {"bins": int(n_bins), "band_width_mean": float(np.mean(hi - lo)) if k else math.nan}
 
 
 def main() -> None:

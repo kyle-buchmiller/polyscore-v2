@@ -126,8 +126,8 @@ pipeline/       the stages, run in order: 01_extract (01a, the base pull) and 01
                 and run_sql (a psql-free runner for the .sql files)
 pipeline/sql/   the chunked extraction queries (02a frame, 02b labels, 03 assertions),
                 00_verify, and Estimand B's b00/b01
-src/            shared code the stages import — config, labels, features, draw, calibration,
-                modelling, runs, extract, io, sql
+src/            shared code the stages import — config, labels, features, draw, splits,
+                metrics, modelling, calibration, runs, extract, io, sql
 tests/          guards against the failure modes in specs/05, and against the ones the
                 stage rehearsal produced (a rounded instance number, a stale base)
 data/           bases, runs, reports and the PE gate (gitignored; every run under data/runs/<run_id>/)

@@ -37,7 +37,8 @@ from sklearn.model_selection import StratifiedKFold, cross_val_score
 
 from polyscore_v2.config import PROVENANCE_PROBE_MAX_AUC, settings
 from polyscore_v2.logging_setup import configure
-from polyscore_v2.modelling import CUSTOMER, design, fmt, metrics_table
+from polyscore_v2.metrics import CUSTOMER, fmt, metrics_table
+from polyscore_v2.modelling import design
 from polyscore_v2.io import read_snapshot
 from polyscore_v2.runs import load_run, read_manifest
 

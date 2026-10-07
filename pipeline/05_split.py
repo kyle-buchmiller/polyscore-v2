@@ -26,7 +26,6 @@ import argparse
 import datetime as dt
 import json
 
-import numpy as np
 import pandas as pd
 
 from polyscore_v2.config import settings
@@ -34,38 +33,10 @@ from polyscore_v2.io import read_snapshot
 from polyscore_v2.labels import Label
 from polyscore_v2.logging_setup import configure
 from polyscore_v2.runs import load_run, read_manifest
+from polyscore_v2.splits import (FOLDS, grouping_key, horizon_gap, prevalence, random_split,
+                                 straddling_groups, temporal_grouped)
 
 log = configure()
-FOLDS = ("train", "validate", "test")
-
-
-def temporal_grouped(df: pd.DataFrame) -> pd.Series:
-    """Fold per row: groups ordered by first scoring moment, cut whole at the fractions."""
-    first = df.groupby("group")["scoring_moment"].min().sort_values()
-    sizes = df.groupby("group").size().reindex(first.index)
-    cum = sizes.cumsum() / len(df)
-    fold_of_group = pd.Series("train", index=first.index)
-    fold_of_group[cum > settings.train_frac] = "validate"
-    fold_of_group[cum > settings.train_frac + settings.validate_frac] = "test"
-    return df["group"].map(fold_of_group)
-
-
-def random_split(df: pd.DataFrame, seed: int) -> pd.Series:
-    order = np.random.default_rng(seed).permutation(len(df))
-    fold = np.empty(len(df), dtype=object)
-    n_train = int(round(settings.train_frac * len(df)))
-    n_val = int(round(settings.validate_frac * len(df)))
-    fold[order[:n_train]] = "train"
-    fold[order[n_train:n_train + n_val]] = "validate"
-    fold[order[n_train + n_val:]] = "test"
-    return pd.Series(fold, index=df.index)
-
-
-def prevalence(df: pd.DataFrame) -> dict:
-    y = df["y"].astype(float)
-    w = 1.0 / df["pi"]
-    return {"n": int(len(df)), "raw": round(float(y.mean()), 4) if len(df) else None,
-            "reweighted": round(float((w * y).sum() / w.sum()), 4) if len(df) else None}
 
 
 def main() -> None:
@@ -87,18 +58,17 @@ def main() -> None:
     df = df[df["trainable"]].copy()
     df["y"] = (df["label"] == str(Label.MALICIOUS)).astype("int8")
     df["scoring_moment"] = pd.to_datetime(df["scoring_moment"])
-    df["group"] = df["modal_family"].where(df["modal_family"].fillna("") != "", df["sha256"])
+    df["group"] = grouping_key(df)
 
-    df["fold"] = temporal_grouped(df)
-    train_end = df.loc[df["fold"] == "train", "scoring_moment"].max()
-    gap_start = train_end + dt.timedelta(days=settings.horizon_days)
-    in_gap = (df["fold"] == "test") & (df["scoring_moment"] < gap_start)
+    df["fold"] = temporal_grouped(df, train_frac=settings.train_frac, validate_frac=settings.validate_frac)
+    in_gap, train_end, gap_start = horizon_gap(df, df["fold"], horizon_days=settings.horizon_days)
     dropped = df[in_gap]
     df = df[~in_gap]
-    straddle = (df.groupby("group")["fold"].nunique() > 1).sum()
+    straddle = straddling_groups(df, df["fold"])
     if straddle:
         raise SystemExit(f"{straddle} family groups straddle a fold boundary")
-    df["fold_random"] = random_split(df, settings.random_seed)
+    df["fold_random"] = random_split(df, seed=settings.random_seed, train_frac=settings.train_frac,
+                                     validate_frac=settings.validate_frac)
 
     manifest = {"stage": "05_split", "run_id": run.run_id, "written_at": dt.datetime.now(dt.UTC).isoformat(),
                 "fractions": {"train": settings.train_frac, "validate": settings.validate_frac,
@@ -106,7 +76,7 @@ def main() -> None:
                 "horizon_gap_days": settings.horizon_days, "train_end": str(train_end), "test_not_before": str(gap_start),
                 "dropped_in_gap": int(len(dropped)), "excluded_rate_only": int(len(excluded)),
                 "excluded_by_label": excluded["label"].value_counts().to_dict(),
-                "group": "modal_family (provisional, decisions/0011) else sha256",
+                "group": "tlsh_cluster, else imphash, else modal_family (provisional, decisions/0011), else sha256",
                 "groups": {f: int(df.loc[df["fold"] == f, "group"].nunique()) for f in FOLDS},
                 "folds": {f: prevalence(df[df["fold"] == f]) for f in FOLDS},
                 "folds_random": {f: prevalence(df[df["fold_random"] == f]) for f in FOLDS},

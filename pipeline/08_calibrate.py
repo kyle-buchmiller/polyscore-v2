@@ -40,7 +40,8 @@ import pandas as pd
 from polyscore_v2.calibration import fit_calibrator, provisional_combiner
 from polyscore_v2.labels import assert_calibration_eligible
 from polyscore_v2.logging_setup import configure
-from polyscore_v2.modelling import CUSTOMER, design, prob_metrics, raw_score
+from polyscore_v2.metrics import CUSTOMER, prob_metrics
+from polyscore_v2.modelling import design, raw_score
 from polyscore_v2.runs import load_run
 
 log = configure()

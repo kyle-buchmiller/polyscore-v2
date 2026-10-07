@@ -39,7 +39,8 @@ from sklearn.metrics import log_loss
 
 from polyscore_v2.config import settings
 from polyscore_v2.logging_setup import configure
-from polyscore_v2.modelling import design, metrics_table, raw_score
+from polyscore_v2.metrics import metrics_table
+from polyscore_v2.modelling import design, raw_score
 from polyscore_v2.runs import load_run, read_manifest
 
 log = configure()
