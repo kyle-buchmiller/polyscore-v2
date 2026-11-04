@@ -331,16 +331,27 @@ not counted as benign — collapsing either into `0` is the 2023 model's error.
 
 | Stratum | Rule | Target share |
 |---|---|---|
-| **Contested** | `0.2 < m < 0.8` | **45%** |
-| Leaning malicious | `0.8 ≤ m < 1.0` | 15% |
-| Leaning clean | `0 < m ≤ 0.2` | 15% |
-| Consensus malicious | `m = 1.0` | 10% |
+| **Contested** | `0.1 < m < 0.4` | **45%** |
+| Leaning malicious | `0.4 ≤ m < 0.5` | 15% |
+| Leaning clean | `0 < m ≤ 0.1` | 15% |
+| Consensus malicious | `m ≥ 0.5` | 10% |
 | Consensus clean | `m = 0` | 10% |
 | Injected known-good | not drawn — see below | 5% |
 
 Shares are **targets for the draw, not claims about the world.** They are provisional
 until stage 02 reports how many artifacts each band actually holds. A band that cannot
 fill its share is *reported*, never quietly back-filled from another.
+
+*Why consensus starts at half, not at unanimity.* On this roster a benign verdict is
+mostly the absence of a signature — an engine with no coverage for the family, or none
+for PE at all, answers benign — so `m` has a ceiling set by the roster, not by the file.
+Nothing in the stage window reaches `m = 1` at normal coverage; the highest is 13 of 15,
+and a file hand-verified as a covert miner sits at 7 of 13 definite verdicts, 40 of 69
+on VirusTotal. The edges above are the first set divided by two, **set by judgement
+rather than measurement** — they encode one engineer's perception of where consensus
+ends on this roster, and the per-band T+30 flip rate on the prod base is what confirms
+or moves them ([`0012`](../decisions/0012-band-edges-halved.md)). At the median
+coverage of 15 they read as hit counts: 0 / 1 / 2–5 / 6–7 / 8 or more.
 
 *Why stratify at all.* A flat draw at realistic prevalence yields too few positives to
 fit anything, and gives no control over how many hard cases are present.
@@ -376,8 +387,10 @@ reported separately and never folded into a band by a noisy ratio.
 > filling in, and the newcomers skewed malicious (5/7) against the originals (2/7).
 >
 > A flat floor of 5 would have admitted that artifact. A floor expressed as a *fraction of
-> typical coverage* would not. The floor is still unset pending prod volume, but it should
-> be specified relative to the observed distribution rather than as a bare count.
+> typical coverage* would not. The floor is **provisionally 10** — two thirds of the
+> observed median of 15 — until the prod survey reports the answer-count distribution;
+> it is specified relative to that distribution, never as a bare count
+> ([`0012`](../decisions/0012-band-edges-halved.md)).
 
 > This is a *different* axis from the **coverage tier** in [`06-signals.md`](./06-signals.md),
 > which counts available *signal families* (signature, sandbox, static) rather than engine
@@ -522,7 +535,7 @@ matrix whole.
 
 ---
 
-**Estimand version:** `5` · frozen 2026-10-01 · unsigned
+**Estimand version:** `6` · frozen 2026-11-03 · unsigned
 
 | Version | Change |
 |---|---|
@@ -531,6 +544,7 @@ matrix whole.
 | 3 (2026-09-24) | §3 collapsed to four labels for the pilot — [`0007`](../decisions/0007-four-labels-for-the-pilot.md) |
 | 4 (2026-09-24) | §10 training population, separated from §1's reference population — [`0008`](../decisions/0008-training-population-is-broader-than-the-reference-population.md) |
 | 5 (2026-10-01) | §4 split into a natural-rescan training arm and a forced validation arm; §11 scale and reproducibility — [`0010`](../decisions/0010-natural-rescans-for-training-forced-for-validation.md) |
+| 6 (2026-11-03) | §9 band edges halved, consensus malicious at `m ≥ 0.5`; answering floor provisionally 10 — [`0012`](../decisions/0012-band-edges-halved.md) |
 
 **No results have been produced under any version**, so no version bump here has
 invalidated anything. That stops being true the moment stage 09 runs once.

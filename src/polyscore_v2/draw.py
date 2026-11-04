@@ -21,7 +21,8 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .config import CONTESTED_LOWER, CONTESTED_UPPER, MIN_ANSWERING_ENGINES, STRATUM_TARGETS
+from .config import (
+    CONSENSUS_MALICIOUS, CONTESTED_LOWER, CONTESTED_UPPER, MIN_ANSWERING_ENGINES, STRATUM_TARGETS)
 
 #: Strata the draw takes from. injected_known_good is in STRATUM_TARGETS but is sourced
 #: externally and never drawn from the base; below_floor is reported, never drawn.
@@ -36,6 +37,7 @@ def assign_stratum(
     *,
     lower: float = CONTESTED_LOWER,
     upper: float = CONTESTED_UPPER,
+    consensus: float = CONSENSUS_MALICIOUS,
     min_definite: int | None = MIN_ANSWERING_ENGINES,
 ) -> pd.Series:
     """Band each artifact on m = n_malicious / n_definite, at draw time.
@@ -43,6 +45,10 @@ def assign_stratum(
     Computed here rather than read from the base so the band edges can be revised after
     stage 02 reports on them without a re-pull. The run manifest records which edges
     were used.
+
+    Consensus malicious starts at `consensus`, not at unanimity: a benign verdict on this
+    roster is mostly the absence of a signature, so m never reaches 1 at full coverage
+    (decisions/0012).
 
     m is undefined when nothing answered definitely, and meaningless when very little
     did -- one verdict moves m by 0.5 at two engines. Both land in `below_floor`, which
@@ -56,8 +62,8 @@ def assign_stratum(
     out[ok & (m == 0)] = "consensus_clean"
     out[ok & (m > 0) & (m <= lower)] = "leaning_clean"
     out[ok & (m > lower) & (m < upper)] = "contested"
-    out[ok & (m >= upper) & (m < 1)] = "leaning_malicious"
-    out[ok & (m == 1)] = "consensus_malicious"
+    out[ok & (m >= upper) & (m < consensus)] = "leaning_malicious"
+    out[ok & (m >= consensus)] = "consensus_malicious"
     return out
 
 
@@ -90,6 +96,7 @@ def stratified_draw(
     targets: dict[str, float] = STRATUM_TARGETS,
     lower: float = CONTESTED_LOWER,
     upper: float = CONTESTED_UPPER,
+    consensus: float = CONSENSUS_MALICIOUS,
     min_definite: int | None = MIN_ANSWERING_ENGINES,
 ) -> tuple[pd.DataFrame, list[StratumReport]]:
     """Draw `cohort_size` artifacts from the base, stratified, recording pi per row.
@@ -102,7 +109,8 @@ def stratified_draw(
         raise ValueError("the base must be edge-agnostic; stratum is computed here, not stored")
     df = base.copy()
     df["stratum"] = assign_stratum(
-        df["n_malicious"], df["n_definite"], lower=lower, upper=upper, min_definite=min_definite
+        df["n_malicious"], df["n_definite"],
+        lower=lower, upper=upper, consensus=consensus, min_definite=min_definite,
     )
     df["_key"] = _permutation_key(df["sha256"], seed)
 

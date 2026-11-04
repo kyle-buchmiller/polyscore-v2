@@ -27,7 +27,8 @@ import sys
 from pathlib import Path
 
 from polyscore_v2.config import (
-    CONTESTED_LOWER, CONTESTED_UPPER, MIN_ANSWERING_ENGINES, STRATUM_TARGETS, settings)
+    CONSENSUS_MALICIOUS, CONTESTED_LOWER, CONTESTED_UPPER, MIN_ANSWERING_ENGINES,
+    STRATUM_TARGETS, settings)
 from polyscore_v2.draw import check_draw, stratified_draw
 from polyscore_v2.io import read_snapshot, write_snapshot
 from polyscore_v2.logging_setup import configure
@@ -78,7 +79,7 @@ def main() -> None:
         base_window=base_manifest.get("window"),
         horizon_max_days=base_manifest.get("horizon_max_days", settings.horizon_max_days),
         cohort_size_requested=settings.cohort_size,
-        band_edges={"lower": CONTESTED_LOWER, "upper": CONTESTED_UPPER},
+        band_edges={"lower": CONTESTED_LOWER, "upper": CONTESTED_UPPER, "consensus": CONSENSUS_MALICIOUS},
         min_definite=MIN_ANSWERING_ENGINES,
         targets=STRATUM_TARGETS,
         strata=[dataclasses.asdict(r) for r in reports],

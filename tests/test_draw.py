@@ -14,7 +14,7 @@ def _base(n: int, seed: int = 0) -> pd.DataFrame:
     rng = np.random.default_rng(seed)
     n_def = rng.integers(5, 20, size=n)
     # mix of bands: mostly clean, a healthy contested middle, some consensus-malicious
-    frac = rng.choice([0.0, 0.1, 0.5, 0.9, 1.0], size=n, p=[0.4, 0.15, 0.25, 0.1, 0.1])
+    frac = rng.choice([0.0, 0.07, 0.25, 0.45, 0.7], size=n, p=[0.4, 0.15, 0.25, 0.1, 0.1])
     n_mal = np.round(frac * n_def).astype(int)
     return pd.DataFrame({
         "sha256": [f"{i:064x}" for i in range(n)],
@@ -68,7 +68,7 @@ def test_underfill_is_reported_not_backfilled():
     """A band that cannot supply its share stays short. Never borrow from a neighbour."""
     base = _base(5_000)
     # make consensus_malicious tiny
-    cm = (base["n_malicious"] == base["n_definite"]) & (base["n_definite"] >= 5)
+    cm = (base["n_malicious"] >= 0.5 * base["n_definite"]) & (base["n_definite"] >= 5)
     base = pd.concat([base[~cm], base[cm].head(3)])
     cohort, reports = stratified_draw(base, cohort_size=2_000, seed=9, min_definite=5)
     r = next(r for r in reports if r.stratum == "consensus_malicious")
@@ -94,6 +94,16 @@ def test_the_base_must_be_edge_agnostic():
 
 
 def test_stratum_edges_are_applied_at_draw_time():
-    s = assign_stratum(pd.Series([0, 1, 5, 9, 10, 2]), pd.Series([10, 10, 10, 10, 10, 3]), min_definite=5)
+    s = assign_stratum(pd.Series([0, 1, 3, 6, 7, 2]), pd.Series([15, 15, 15, 15, 13, 3]), min_definite=5)
     assert list(s) == ["consensus_clean", "leaning_clean", "contested",
                        "leaning_malicious", "consensus_malicious", "below_floor"]
+
+
+def test_consensus_is_half_not_unanimity():
+    """decisions/0012: m never reaches 1 at full coverage, so consensus starts at 0.5 --
+    and the same seven hits change band with the denominator, which is why the floor exists."""
+    s = assign_stratum(pd.Series([13, 7, 7, 6, 1, 1]), pd.Series([15, 15, 13, 15, 10, 2]), min_definite=10)
+    assert list(s) == ["consensus_malicious", "leaning_malicious", "consensus_malicious",
+                       "leaning_malicious", "leaning_clean", "below_floor"]
+    # the config floor applies by default: a 1-of-2 scan never lands in a band
+    assert list(assign_stratum(pd.Series([1]), pd.Series([2]))) == ["below_floor"]

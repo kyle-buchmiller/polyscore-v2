@@ -33,13 +33,13 @@ this file is what blocks us now.
   change the plan rather than the parameter: a p90 far beyond the horizon means most labels
   are not T+30 labels, and gaps that are systematically longer for contested artifacts than
   for consensus ones mean the heterogeneity tracks difficulty.
-- **The §9 band thresholds, and the answering-engine floor.** `0.2` and `0.8` were chosen
-  before anyone looked at how the bands actually populate, and the 45% contested share is
-  an assertion about where the hard cases live, not a measurement. The minimum answering
-  count below which `m` is treated as noise is **not set at all** — it needs the
-  distribution of answer counts, which stage 02 produces. Stage 02 reports the realized shares against the
-  targets; revisit **once**, and record the revision in `decisions/` rather than editing
-  the numbers in silence.
+- ~~**The §9 band thresholds, and the answering-engine floor.**~~ — **revised 2026-11-03,
+  by judgement** ([`0012`](../decisions/0012-band-edges-halved.md)): the edges are halved
+  to `0.1` / `0.4` with consensus malicious at `m ≥ 0.5`, because nothing on this roster
+  reaches `m = 1` at normal coverage; the floor is provisionally 10. What is still owed is
+  the measurement that confirms or moves them: the per-band **T+30 flip rate** on the
+  prod base, the realized shares against the targets, and the answer-count distribution
+  that sets the floor properly. The 45% contested share remains an assertion.
 - **Where the known-good arm is actually sourced.** [`0006`](../decisions/0006-stratified-sampling-with-recorded-inclusion-probabilities.md)
   fixes the containment rules and the value ordering — hard negatives over signed
   commodity binaries — but names no owner and no corpus. R9 is the ask; this is the plan

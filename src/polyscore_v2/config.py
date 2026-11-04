@@ -13,21 +13,10 @@ from pathlib import Path
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-#: Bumped whenever specs/01-estimand.md sections 1-9 change. Stamped onto every
-#: artefact a stage writes, so a result can always be traced to the rules it was
-#: produced under.
-#:
-#: 1 -> 2 (2026-09-24): added SS9 sampling design and the per-artifact counting rule
-#: in SS1. See decisions/0006. No results were produced under version 1.
-#: 2 -> 3 (2026-09-24): SS3 collapsed to four labels for the pilot; known_good folded
-#: into benign (the grade carries attestation), dual_use into unwanted (a reason field
-#: carries it), excluded into the stage-01 cohort filter. See decisions/0007.
-#: 3 -> 4 (2026-09-24): SS10 training population separated from SS1's reference
-#: population -- train on the whole store, calibrate on SS1 only. See decisions/0008.
-#: 4 -> 5 (2026-10-01): SS4 split into a natural-rescan training arm and a forced
-#: validation arm; SS11 scale and reproducibility (two-tier extraction, run isolation,
-#: process stability). See decisions/0010.
-ESTIMAND_VERSION = 5
+#: Bumped whenever specs/01-estimand.md sections 1-11 change; stamped onto every artefact
+#: a stage writes, so a result can always be traced to the rules it was produced under.
+#: The change log is the version table at the foot of specs/01-estimand.md
+ESTIMAND_VERSION = 6
 
 #: --- estimand SS9: sampling design -------------------------------------------
 #: Target share of the draw per stratum, keyed by the name stage 01 writes into the
@@ -37,24 +26,24 @@ ESTIMAND_VERSION = 5
 #: that under-fills is a reported shortfall, never back-filled from a neighbour.
 STRATUM_TARGETS: dict[str, float] = {
     "contested": 0.45,            # CONTESTED_LOWER < m < CONTESTED_UPPER -- over-represented on purpose
-    "leaning_malicious": 0.15,    # CONTESTED_UPPER <= m < 1.0
+    "leaning_malicious": 0.15,    # CONTESTED_UPPER <= m < CONSENSUS_MALICIOUS
     "leaning_clean": 0.15,        # 0 < m <= CONTESTED_LOWER
-    "consensus_malicious": 0.10,  # m == 1.0
+    "consensus_malicious": 0.10,  # m >= CONSENSUS_MALICIOUS
     "consensus_clean": 0.10,      # m == 0
     "injected_known_good": 0.05,  # not drawn -- externally sourced, excluded from prevalence
 }
 
-#: Band edges on m. Both were chosen before anyone looked at how the bands populate;
-#: revisit once against stage 02's report (specs/99-open-questions.md).
-CONTESTED_LOWER = 0.2
-CONTESTED_UPPER = 0.8
+#: Band edges on m. Unanimity is unreachable on this roster: a benign verdict is mostly
+#: the absence of a signature, so m tops out near 0.85 at full coverage and consensus
+#: starts at half. Set by judgement, not measurement: see decisions/0012-band-edges-halved.md
+CONTESTED_LOWER = 0.1
+CONTESTED_UPPER = 0.4
+CONSENSUS_MALICIOUS = 0.5
 
-#: Below this many *answering* engines m is noise -- one verdict moves it by 0.5 at
-#: two engines. Such artifacts form their own stratum rather than joining a band.
-#: None means "not yet set": stage 02 produces the answer-count distribution this
-#: needs, and a guessed floor silently reshapes the draw. Distinct from the coverage
-#: tier in specs/06-signals.md, which counts signal families, not engine responses.
-MIN_ANSWERING_ENGINES: int | None = None
+#: Below this many *answering* engines m is noise (one verdict moves it by 0.5 at two);
+#: provisional at two thirds of the median coverage of 15, until the prod survey reports
+#: the answer-count distribution. see specs/01-estimand.md § 9 · Sampling design
+MIN_ANSWERING_ENGINES: int | None = 10
 
 #: Stage 06 rejects the draw above this. A classifier that can predict ``provenance``
 #: from the feature set is identifying the upload batch rather than the file.
