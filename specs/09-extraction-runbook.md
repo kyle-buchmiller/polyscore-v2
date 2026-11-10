@@ -154,10 +154,24 @@ curl -sS -H "cf-access-token: $CF_ACCESS_TOKEN" -u "$ES_USER:$ES_PASS" \
 > **The second layer, settled 2026-10-05 from the charts rather than the wire.** `shifty`'s
 > chart carries *both* a Cloudflare Access service token and `OPENSEARCH_USER` /
 > `OPENSEARCH_PASSWORD` for this same host, so the domain's security plugin does want an
-> internal user behind Access; `-u` (or `POLYSCORE_ES_USER/PASSWORD`) carries it. The prod
-> door itself is still unexercised from a workstation — nobody has run `cloudflared access
-> login` here yet — and the read-only internal user to pair with it has to come from
-> wherever `shifty`'s does, because `ReadOnlyProd` cannot read prod secrets.
+> internal user behind Access; `-u` (or `POLYSCORE_ES_USER/PASSWORD`) carries it. The
+> read-only internal user to pair with it has to come from wherever `shifty`'s does,
+> because `ReadOnlyProd` cannot read prod secrets.
+>
+> **The door itself, measured 2026-11-06 from a workstation.** `cloudflared access login`
+> completes: the browser SSO issues an app token for the right audience, signed with a key
+> in the team's JWKS, seven days to expiry. The edge then refuses every request that
+> carries it — `/_cluster/health` and `metadata-*/_count` both answer `302` to the Access
+> login page, whose redirect metadata reads `auth_status: NONE` — and `cloudflared`'s own
+> verify-at-edge step fails the same way (`failed to verify token`, after discarding the
+> token and fetching a second one). So the Access application as configured does not
+> honour app tokens presented by a CLI; a binding-cookie, mTLS or per-request posture
+> requirement would each look exactly like this, and only its administrator can say which.
+> A Python client does not get that far: the zone's browser-integrity check answers
+> `error code: 1010` to urllib's default client string before Access is consulted.
+> Two asks, both to whoever runs Cloudflare for the zone: honour app tokens on this
+> application, or issue a **service token** for this repo under a Service Auth policy
+> (the route `shifty` already uses) — plus the internal user above in either case.
 >
 > **Stage has a door of its own, and it is unreachable from a workstation.** The stage
 > tunnel routes `kibana.internal.polyswarm.network` to stage's `vpc-elastic-01…` domain —

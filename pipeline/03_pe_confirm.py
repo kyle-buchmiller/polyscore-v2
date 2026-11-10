@@ -72,11 +72,22 @@ def _headers() -> dict[str, str]:
     return h
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Surface a 302 as an error: followed silently, the Access login page comes back as
+    HTML with status 200 and the failure shows up as a JSON parse error two calls later."""
+
+    def redirect_request(self, *args, **kwargs):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
 def _call(method: str, path: str, body: dict | None = None) -> dict:
     req = urllib.request.Request(f"{_host()}{path}", method=method, headers=_headers(),
                                  data=json.dumps(body).encode() if body is not None else None)
     try:
-        with urllib.request.urlopen(req, timeout=300) as r:
+        with _OPENER.open(req, timeout=300) as r:
             out = json.loads(r.read())
     except urllib.error.HTTPError as e:
         _explain(e, path)
@@ -96,6 +107,11 @@ class ShardFailure(RuntimeError):
 
 def _explain(e: urllib.error.HTTPError, path: str) -> None:
     text = e.read().decode(errors="replace")[:400]
+    # The zone's WAF answers in Cloudflare's own 10xx vocabulary before Access or the domain
+    # see the request; an OpenSearch 403 never carries it. see specs/09-extraction-runbook.md
+    if "error code: 10" in text:
+        sys.exit(f"{e.code} from the Cloudflare edge, not OpenSearch ({text.strip()[:40]}): the zone "
+                 f"refused this client before the request reached Access or the domain")
     if e.code in (401, 403):
         sys.exit(f"{e.code} from OpenSearch: the domain wants an internal user -- set "
                  f"POLYSCORE_ES_USER/PASSWORD (door) or check ELASTICSEARCH_USER (--direct). "

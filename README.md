@@ -86,7 +86,8 @@ Where it stands, as of 2026-10-07:
   numbers it printed are mechanics, not a model — stage's feeds are scanned once and
   never again, so the window holds 32 labellable artifacts.
 - **Prod is blocked on one thing**: an EKS access entry for `ReadOnlyProd`, which the
-  Postgres tunnel needs. The PE gate can already go through the Cloudflare door.
+  Postgres tunnel needs. The PE gate's Cloudflare door issues a token and then refuses it
+  (runbook § The OpenSearch door), so it waits on the zone's administrator too.
 - **The label rule and four other stand-ins are provisional** — engines for clusters,
   family strings for specificity, no stability check, the modal family as the split
   group, calibration on grade-1 labels only with `--provisional`
