@@ -57,6 +57,12 @@ a different product.
 > in the mapping but **written by nothing** (do not use them), and pre-September coverage
 > is ~37% and biased, so Estimand B still takes features from psstorage.
 >
+> **One more exception, bounded and temporary.** While the replica is out of reach the pilot's
+> base is an **API slice** of this index ([`12-api-slice-pilot.md`](./12-api-slice-pilot.md),
+> [`0013`](../decisions/0013-pilot-data-from-the-public-api.md)): it reads the `first_scan`
+> sub-document, which is written once, and the `latest_scan` sub-document as of pull time,
+> recorded as such. It never reads the index for a chosen label scan.
+>
 > Also indexed and reachable the same way, relevant later: `known_good` (R9's catalogue),
 > `cape_sandbox_v2` and `triage_sandbox_v0` (the sandbox signals in `06-signals.md`).
 

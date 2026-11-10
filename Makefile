@@ -1,5 +1,5 @@
 .PHONY: help setup lock lint test clean \
-        pe-gate survey base extract compose compose-run draw label features split baselines train calibrate evaluate \
+        slice force-draw force-submit force-collect pe-gate survey base extract compose compose-run draw label features split baselines train calibrate evaluate \
         all rehearsal
 
 VENV ?= .venv
@@ -32,6 +32,12 @@ CALIBRATE_FLAGS ?= --provisional
 OVERWRITE       ?=
 # RUN=<id> makes `make compose` report that run beside the base
 RUN             ?=
+# the API slice (step 0): a lowercase hex sha256 prefix, pi = 16^-len; empty derives one from the seed
+PREFIX          ?=
+SLICE_FLAGS     ?=
+# the forced-rescan run (step 0b): the slices to draw from, and the phase flags
+SLICES          ?= data/api_slice/2026-09-08_2026-10-08_a1.parquet data/api_slice/2026-09-08_2026-10-08_a0.parquet
+FORCE_FLAGS     ?=
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -58,6 +64,19 @@ clean:  ## remove caches (never touches data/)
 	rm -rf .pytest_cache .ruff_cache
 
 # --- extraction: needs the Postgres tunnel open and kubectl pointed at $(KUBE_CONTEXT) -----------
+slice:  ## step 0 (API): a sha256-prefix slice of the public metadata index and its survey; needs POLYSCORE_API_KEY
+	$(PY) pipeline/00_api_slice.py --start $(WINDOW_START) --end $(WINDOW_END) $(if $(PREFIX),--prefix $(PREFIX),) \
+	    --horizon-max-days $(HORIZON_MAX) $(SLICE_FLAGS) $(OVERWRITE)
+
+force-draw:  ## step 0b.1: band the slices at T and draw the cohort to rescan (needs POLYSCORE_API_KEY from here on)
+	$(PY) pipeline/00b_force_rescan.py $(OVERWRITE) draw $(foreach s,$(SLICES),--slice $(s)) --max-age-days $(HORIZON_MAX) $(FORCE_FLAGS)
+
+force-submit:  ## step 0b.2: POST the rescans, resumably (FORCE_FLAGS=--limit 20 for a canary)
+	$(PY) pipeline/00b_force_rescan.py submit $(FORCE_FLAGS)
+
+force-collect:  ## step 0b.3: read the forced scans back; writes the base and the run cohort
+	$(PY) pipeline/00b_force_rescan.py $(OVERWRITE) collect $(FORCE_FLAGS)
+
 pe-gate:  ## step 1: the confirmed-PE hash list from OpenSearch, run inside the CLI pod
 	mkdir -p data/pe_confirmed
 	POD=$$(kubectl --context $(KUBE_CONTEXT) -n ai get pods -o name | grep artifact-index-cli-terminal); \

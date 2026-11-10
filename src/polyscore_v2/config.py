@@ -10,7 +10,7 @@ from __future__ import annotations
 import datetime as dt
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 #: Bumped whenever specs/01-estimand.md sections 1-11 change; stamped onto every artefact
@@ -70,6 +70,10 @@ class Settings(BaseSettings):
     db_uri: str = ""
     firehose_dir: Path | None = None
     data_dir: Path = Path("./data")
+    #: The public API, the pilot's source while the replica is out of reach (decisions/0013).
+    #: The key is read from the environment only; it is never written anywhere by this code.
+    api_url: str = "https://api.polyswarm.network/v3"
+    api_key: str = Field(default="", validation_alias=AliasChoices("POLYSCORE_API_KEY", "POLYSWARM_API_KEY"))
 
     # --- estimand SS1: reference population ---------------------------------
     # The frame the probability is ABOUT, and the frame the calibrator is fitted on.

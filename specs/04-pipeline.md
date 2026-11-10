@@ -33,6 +33,8 @@ types and will not silently turn a hash into a number.
 
 | Stage | Reads | Writes | Libraries |
 |---|---|---|---|
+| `00_api_slice.py` | public API (`/v3/search/metadata/query`) | `data/api_slice/<start>_<end>_<prefix>.parquet` + manifest, raw pages under `data/api_slice/.cache/`, `data/reports/api_slice_<key>.txt` | urllib, pandas, pyarrow |
+| `00b_force_rescan.py` | API slices (`draw`), the public API (`submit`, `collect`) | `data/forced/<run_id>/{draw.parquet, rescans.jsonl, collect.report.txt}`; then `data/base/forced_<run_id>.parquet` (+ `.assertions.parquet`, manifest) and `data/runs/<run_id>/cohort.parquet` (+ manifest), in 01a's and 01b's shapes | urllib, pandas, pyarrow |
 | `01_extract.py` (01a) | Postgres | `data/base/<window>.parquet`, `.assertions.parquet`, `.control.parquet` (pending) + manifest | sqlalchemy, psycopg, pandas, pyarrow |
 | `01b_draw.py` | base | `data/runs/<run_id>/cohort.parquet` + manifest | pandas, pyarrow |
 | `02_compose.py` | base (+ one run's cohort) | `data/reports/composition_<window>[_<run_id>].txt` | pandas |
@@ -51,6 +53,31 @@ named in [`decisions/0011`](../decisions/0011-provisional-pilot-rules.md) and sa
 its output.
 
 ## Stage contracts
+
+**00 · API slice — the pilot's source while the replica is out of reach**
+([`0013`](../decisions/0013-pilot-data-from-the-public-api.md)). A sha256-prefix sample of the
+public metadata index over a first-scan window, with `π = 16^-k` recorded, plus the survey
+that sizes the prefix for a 10k cohort. It stands in for 01a's base until the exporter
+(DN-8712) ships; the deviations it forces — the index's first scan as T, the latest scan as
+the label, engines by display name, no provenance and so no calibration — are the contract
+of [`12-api-slice-pilot.md`](./12-api-slice-pilot.md).
+
+**00b · forced rescans** ([`0014`](../decisions/0014-forced-rescans-for-the-training-arm.md)).
+Three resumable phases over an API slice of a month already `horizon_days` old: `draw` bands
+every scanned-first file at T, leaves out files over the rescan route's size cap
+(`--max-size-bytes`, decided by the index's `artifact.size`) and draws the cohort per §9
+(`pi_draw` beside the slices' `pi_base`; the product is `pi`); `submit` POSTs one rescan per
+file through `/v3/consumer/submission/<community>/rescan/sha256/<hash>` in a seeded random
+order, one JSONL line per file, so a run cut short is a random subsample and a killed run
+resumes; `collect` reads the forced and the T instances back as full renders
+(`GET /v3/instance?id=`, cached as JSONL), accepts a forced scan once its window has closed,
+and writes a base + assertions in 01a's shape and the run cohort in 01b's, so 02 → 09 run
+unchanged. The files it drops are counted by status (`not_submitted`, `missing_render`,
+`failed`, `pending`, `no_assertions`) and never back-filled by `collect`; because the draw is
+the head of a fixed per-band permutation, re-running `draw` after a frame rule tightens
+keeps every file still in frame and appends the next in order, and `submit` and `collect`
+resume over the same logs. Contract and deviations:
+[`12`](./12-api-slice-pilot.md) § Forced rescans.
 
 **01 · extract — two tiers** ([`0010`](../decisions/0010-natural-rescans-for-training-forced-for-validation.md)).
 

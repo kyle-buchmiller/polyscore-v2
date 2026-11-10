@@ -1,6 +1,6 @@
 # 0010 — Natural rescans for training, forced rescans for validation
 
-- **Status:** Accepted
+- **Status:** Accepted — the training arm's label is forced too since [0014](./0014-forced-rescans-for-the-training-arm.md)
 - **Date:** 2026-10-01
 - **Affects:** `specs/01-estimand.md` (§4, §9, new §11), `specs/04-pipeline.md` (stage 01), `specs/05-evaluation.md`, `specs/09-extraction-runbook.md`, `src/polyscore_v2/config.py`
 

@@ -40,3 +40,5 @@ than one that records being right.
 | [0010](./0010-natural-rescans-for-training-forced-for-validation.md) | Natural rescans for training, forced rescans for validation; two-tier extraction | Accepted |
 | [0011](./0011-provisional-pilot-rules.md) | The stand-ins that let the pilot run end to end — label rule, split group, calibration on grade-1 labels | Proposed |
 | [0012](./0012-band-edges-halved.md) | The band edges are halved; consensus malicious starts at half — by judgement | Accepted |
+| [0013](./0013-pilot-data-from-the-public-api.md) | The pilot's data comes from the public API, as a sha256-prefix slice | Accepted |
+| [0014](./0014-forced-rescans-for-the-training-arm.md) | Forced rescans label the training arm too (amends 0010) | Accepted |
