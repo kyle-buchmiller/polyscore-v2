@@ -152,6 +152,24 @@ only access.
 
 ## Blocking a real model
 
+- **The provisional label restates the T band (measured 2026-11-10 on the forced
+  cohort, [12 § Forced rescans](./12-api-slice-pilot.md)).** Baseline 3 scores 0.999 AUC
+  on validate, estimand §8's stop. Under [0011](../decisions/0011-provisional-pilot-rules.md)
+  benign means no malicious verdict at the label scan and malicious means a specific-family
+  consensus, so the band at T decides the label almost everywhere: 896 of 920 benign were
+  below 0.1 at T, 34 of 4,798 malicious were. At a 54-day gap the engines rarely resolve a
+  contested file (3,890 of 4,573 stay contested; 133 go clean), so the rule leaves 3,664
+  files undecidable, the very files a score is for. Open, in order of cost: a benign
+  definition that reads retraction and a malicious one that reads convergence rather than
+  the level at the label scan; a longer horizon (does the contested band resolve at 90 or
+  180 days?); gold labels for the contested band (the 200-file slice above). Until one of
+  these lands, no model trained on this run measures anything, and the incumbent cannot be
+  compared either.
+- **A one-month window has no temporal test fold.** SS5's 30-day gap pushes
+  `test_not_before` past the window's end (1,671 rows dropped in the gap, test n = 0); only
+  the random grouped split has one. Either the frame spans three months or more (an earlier
+  slice month, rescanned under the same rule, with its longer gap recorded) or the split's
+  gap and fractions are set for the window as a recorded deviation.
 - **Inter-analyst agreement in the 0.3–0.7 band.** Never measured. It is the ceiling on
   calibration in the only region where a calibrated probability beats what exists today.
   A 200-file dual-adjudication pilot answers it cheaply and should precede any headcount
@@ -169,8 +187,34 @@ only access.
 - **`delete_at` is written by nothing in `artifact-index`**, so whether another service or
   a retention job physically removes `artifactinstance` rows is unknown — confirm before
   relying on "history is never destroyed." Estimand B depends on the answer.
-- **Reference-population remeasurement.** The 37%-indexed figure predates the
-  September 2026 fixes; a fresh measurement changes the estimand's §1 caveat.
+- **Reference-population remeasurement.** Measured 2026-11-09 through the API slice
+  ([12 § Measured](./12-api-slice-pilot.md)): the pre-fix index held the *scanned* files,
+  and about 35% of stored public PE files are ever scanned, so "37% indexed" was the
+  scanned share, not a sampling loss. The §1 caveat should say so. Still open: stored-only
+  files carry no PolyScore, so they fall outside §1 by construction; say that explicitly.
+- **Natural rescans are too rare to label a 10k training cohort** (measured 2026-11-09,
+  [12 § Measured](./12-api-slice-pilot.md)): about 10⁻⁴ of scanned public PE files get a
+  later scan 30+ days after T. **Decided the same day by [0014](../decisions/0014-forced-rescans-for-the-training-arm.md)**:
+  the training arm is labelled by forced rescans too. The *standing* source of
+  time-separated labels at scale is DN-8721 (the label rescanner in artifact-index),
+  delivered through the exporter DN-8712.
+- **Arbitration as the label source.** The marketplace's own T + 14 d second look
+  ([12 § Arbitration](./12-api-slice-pilot.md)) would be the free rescanner, but as deployed
+  its ground truth is ClamAV's T verdict restated (983 of 983 agree), one arbiter never
+  answers and one never votes. Open: fix and broaden the arbiter roster (engines whose
+  knowledge moves in two weeks) versus the budgeted rescanner of DN-8721, or both.
+- **PolyScore's input set is the reveal-time view, not the eventual assertions.** Measured
+  2026-11-10 ([12 § deviation 5](./12-api-slice-pilot.md)): artifact-index computes
+  `detections` and the PolyScore once, in `post_reveal_tasks`, from the assertions the read
+  replica showed when the reveal task ran; an assertion landing later reaches the assertions
+  table only. On the cohort's T scans the column is short on 27% of files (by 1–2); on the
+  pilot's forced rescans, submitted at one a second, on 67% (median 2, up to 12). Open:
+  whether v2's T features are the reveal-time set (what the same hook would hand a deployed
+  v2, and the only like-for-like comparison against `incumbent_polyscore`) or the eventual
+  set, which needs the hook to move (score once the window's assertions are in, or re-score
+  on a late one). Either way the forced scans' `label_polyscore` was computed on a thin set
+  and is not an "incumbent at label time" baseline. Filed for the artifact-index team as
+  DN-8723.
 
 ## Deferred by decision
 
