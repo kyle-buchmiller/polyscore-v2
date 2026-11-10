@@ -12,6 +12,9 @@ and the rules any future family must follow.
 - The composition is **fitted, not asserted**. A hand-picked multiplier is banned.
 - **Presence is never a feature.** It routes; what was *observed* is what informs.
 - Absence is at least four distinct states and is never encoded as a blank.
+- Three **output bands on signature state** are required and asserted (§8): the one
+  exception to "fitted", applied after the combiner, reported as a rule, and checked against
+  outcomes like any other band.
 
 ---
 
@@ -299,3 +302,47 @@ Four things, before any code:
 Then refit the combiner and compare reliability per coverage tier before and after. A
 signal that does not move calibration is not free: it costs a parameter and an
 explanation.
+
+---
+
+## 8 · Required output bands on signature state
+
+Leadership requirement, received 2026-11-06 after the project review. Verbatim:
+
+> anything below 0.33 has a valid signature of some type
+> 0.0 if it's from microsoft, nsrl, or another trusted source
+> 0.1 if it's vendor signed
+
+Read as three rules on `polyscore`, the number *after* the combiner:
+
+| Signature state | `polyscore` |
+|---|---|
+| attested by a trusted source — a Microsoft signature, an NSRL match, or another entry on an enumerated list | `0.0` |
+| vendor-signed — a valid signature from a publisher not on that list | `0.1` |
+| no valid signature | never below `0.33` |
+
+The band below 0.33 is reserved for positive attestation. The line sits where the shipped
+model puts a file nobody detected — the 0.3346 constant — which is the natural reading:
+absence of detection earns that much and no more; only evidence *for* the file earns less.
+
+**What this is.** Asserted numbers inside a score whose rule is "fitted, never asserted"
+(§1), so they have to be written down as the exception, not smuggled in as weights.
+
+**Proposed handling — not yet decided.** A rule layer *after* the combiner, on its output:
+
+- the combiner's own number stays exposed (`components.model_probability` and the
+  contributions), and a fired rule is reported in `components` by name, so the drill-down
+  stays exact. A pinned value is not a logit — 0.0 has none — so the schema in §6 needs a
+  way to say "rule fired" that is not a contribution row;
+- a pinned number is still a claim about outcomes. `0.1` says vendor-signed files turn out
+  malicious within 30 days about one time in ten; `0.0` says trusted-source files never
+  do. Both are checked by the same per-tier reliability report as every other band. If
+  the observed rate disagrees, the disagreement is reported; moving the number is
+  leadership's call, not the fit's;
+- "valid signature" means DN-8374's `chain_verified` with `trusted_by_bundle` — not
+  `self_signed`, not `BAD_SIGNATURE`. Whether a weak digest or an expired-but-countersigned
+  chain still counts is owed. The trusted-source list does not exist as a corpus yet
+  (R9 in [`07-requests.md`](./07-requests.md)); Microsoft and NSRL are its first entries.
+
+The calibrated-probability contract (0001) holds unchanged above 0.33. The open items are
+listed in [`99-open-questions.md`](./99-open-questions.md).

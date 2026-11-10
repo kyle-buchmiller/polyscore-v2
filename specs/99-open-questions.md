@@ -44,6 +44,13 @@ this file is what blocks us now.
   fixes the containment rules and the value ordering — hard negatives over signed
   commodity binaries — but names no owner and no corpus. R9 is the ask; this is the plan
   that has to sit behind it.
+- **How the signature bands are applied.** Leadership requires three pinned outputs on
+  signature state — 0.0 trusted source, 0.1 vendor-signed, nothing unsigned below 0.33
+  ([06 § 8](./06-signals.md)). A rule layer after the combiner is the proposed shape. Owed:
+  the definition of *valid signature* in DN-8374's terms (weak digest? expired but
+  countersigned?); the trusted-source list and its owner (R9); whether known-good rows move
+  from NULL (R4) to 0.0; how a pinned value is shown in `components` when it has no logit;
+  and the reliability report that checks 0.0 and 0.1 against T+30 outcomes.
 
 ## Blocking the composite
 
