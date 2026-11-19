@@ -78,6 +78,22 @@ def test_underfill_is_reported_not_backfilled():
     assert all(x.n_draw <= x.n_target for x in others)
 
 
+def test_a_tightened_frame_keeps_the_drawn_files_and_appends_the_next():
+    """Topping up: the draw is the head of a fixed permutation, so removing files from the
+    frame keeps every drawn file still in it, in its band, and fills the quota from behind."""
+    base = _base(20_000)
+    first, _ = stratified_draw(base, cohort_size=2_000, seed=11, min_definite=5)
+    gone = set(first["sha256"].iloc[::3]) | set(base["sha256"].iloc[::7])
+    second, reports = stratified_draw(
+        base[~base["sha256"].isin(gone)], cohort_size=2_000, seed=11, min_definite=5
+    )
+    kept = first[~first["sha256"].isin(gone)]
+    again = kept.merge(second[["sha256", "stratum"]], on="sha256", suffixes=("", "_again"))
+    assert len(again) == len(kept) and (again["stratum"] == again["stratum_again"]).all()
+    assert len(second) == len(first) and not any(r.underfilled for r in reports)
+    assert not set(second["sha256"]) & gone
+
+
 def test_below_floor_is_never_drawn():
     base = _base(2_000)
     cohort, reports = stratified_draw(base, cohort_size=500, seed=5, min_definite=10)

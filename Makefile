@@ -1,5 +1,5 @@
 .PHONY: help setup lock lint test clean \
-        slice force-draw force-submit force-collect inject-draw inject-confirm inject-collect \
+        slice force-static force-draw force-submit force-collect inject-draw inject-confirm inject-collect \
         pe-gate survey base extract compose compose-run draw label gold-draw features split baselines train noise-band calibrate evaluate \
         all rehearsal
 
@@ -76,13 +76,16 @@ slice:  ## step 0 (API): a sha256-prefix slice of the public metadata index and 
 	$(PY) pipeline/00_api_slice.py --start $(WINDOW_START) --end $(WINDOW_END) $(if $(PREFIX),--prefix $(PREFIX),) \
 	    --horizon-max-days $(HORIZON_MAX) $(SLICE_FLAGS) $(OVERWRITE)
 
-force-draw:  ## step 0b.1: band the slices at T and draw the cohort to rescan (needs POLYSCORE_API_KEY from here on)
+force-static:  ## step 0b.1: read the frame's layout fields from the index and mark the memory images (needs POLYSCORE_API_KEY from here on)
+	$(PY) pipeline/00b_force_rescan.py $(OVERWRITE) static $(foreach s,$(SLICES),--slice $(s)) --max-age-days $(HORIZON_MAX) $(FORCE_FLAGS)
+
+force-draw:  ## step 0b.2: band the slices at T, leave the memory images out and draw the cohort to rescan (FORCE_FLAGS=--continues <run> to top an earlier run up)
 	$(PY) pipeline/00b_force_rescan.py $(OVERWRITE) draw $(foreach s,$(SLICES),--slice $(s)) --max-age-days $(HORIZON_MAX) $(FORCE_FLAGS)
 
-force-submit:  ## step 0b.2: POST the rescans, resumably (FORCE_FLAGS=--limit 20 for a canary)
+force-submit:  ## step 0b.3: POST the rescans, resumably (FORCE_FLAGS=--limit 20 for a canary)
 	$(PY) pipeline/00b_force_rescan.py submit $(FORCE_FLAGS)
 
-force-collect:  ## step 0b.3: read the forced scans back; writes the base and the run cohort
+force-collect:  ## step 0b.4: read the forced scans back; writes the base and the run cohort
 	$(PY) pipeline/00b_force_rescan.py $(OVERWRITE) collect $(FORCE_FLAGS)
 
 inject-draw:  ## step 0c.1: the Microsoft-signed, verified, scanned-first candidates under INJECT_PREFIX (needs POLYSCORE_API_KEY)

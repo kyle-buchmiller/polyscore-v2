@@ -44,3 +44,4 @@ than one that records being right.
 | [0014](./0014-forced-rescans-for-the-training-arm.md) | Forced rescans label the training arm too (amends 0010) | Accepted |
 | [0015](./0015-injection-arm-from-the-index-authenticode-and-virustotal.md) | The injection arm is drawn from the index by Authenticode and admitted on VirusTotal's signature check too | Accepted |
 | [0016](./0016-convergence-label-and-within-band-gate.md) | The answer column reads movement between the scans, and the gate is scored within band (supersedes 0011's label rule) | Accepted |
+| [0017](./0017-memory-images-are-not-training-material.md) | Memory images are not training material; on-disk variants of one program stay | Accepted |

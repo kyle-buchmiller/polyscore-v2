@@ -16,7 +16,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #: Bumped whenever specs/01-estimand.md sections 1-11 change; stamped onto every artefact
 #: a stage writes, so a result can always be traced to the rules it was produced under.
 #: The change log is the version table at the foot of specs/01-estimand.md
-ESTIMAND_VERSION = 7
+ESTIMAND_VERSION = 8
 
 #: --- estimand SS9: sampling design -------------------------------------------
 #: Target share of the draw per stratum, keyed by the name stage 01 writes into the

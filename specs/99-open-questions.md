@@ -191,7 +191,28 @@ only access.
   `test_not_before` past the window's end (1,671 rows dropped in the gap, test n = 0); only
   the random grouped split has one. Either the frame spans three months or more (an earlier
   slice month, rescanned under the same rule, with its longer gap recorded) or the split's
-  gap and fractions are set for the window as a recorded deviation.
+  gap and fractions are set for the window as a recorded deviation. Planned (Kyle,
+  2026-11-18): once this pilot is through, the whole process is repeated on a wider window
+  and the two are compared.
+- **What PolyScore v2 says about a memory image.**
+  [0017](../decisions/0017-memory-images-are-not-training-material.md) takes memory images
+  out of the training population (§10) and leaves the reference population (§1) alone, and
+  a customer can submit one. The choices: score it like any other file, withhold the score,
+  or give it a rule of its own. Each needs the image told from a file as built at analysis
+  time, which is DN-8811's tag.
+- **The gold slice after the memory-image rule.** 139 of the 200 files of `forced-a`'s gold
+  slice are memory images by their bytes and are out of the training population; 61 remain
+  (45 confirmed as built, 16 with no verdict either way). Open: whether the slice is topped
+  up from the on-disk contested rows, which needs no rescan, and whether the memory-image
+  clusters are adjudicated to the end (two builds decide 123 of the 139 files).
+- **The memory-image rule is a floor.** A dump saved back into file layout at a default
+  image base looks like a file as built in every field the index stores: 3 of the 64
+  gold-slice files that pass the rule are such dumps, so about one kept contested row in
+  twenty may be another ([12 § Memory images are out of frame](./12-api-slice-pilot.md)).
+  A byte-level pass with DN-8811's prototype over the 32-bit files of `forced-b` (4,770
+  files, 13.4 GB to download) would close it. A top-up after it is cheapest before
+  2026-12-07, when the window's first files turn 90 days old and start leaving the frame.
+  Not decided.
 - **Inter-analyst agreement in the 0.3–0.7 band.** Never measured. It is the ceiling on
   calibration in the only region where a calibrated probability beats what exists today.
   A 200-file dual-adjudication pilot answers it cheaply and should precede any headcount

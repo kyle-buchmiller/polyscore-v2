@@ -34,7 +34,7 @@ types and will not silently turn a hash into a number.
 | Stage | Reads | Writes | Libraries |
 |---|---|---|---|
 | `00_api_slice.py` | public API (`/v3/search/metadata/query`) | `data/api_slice/<start>_<end>_<prefix>.parquet` + manifest, raw pages under `data/api_slice/.cache/`, `data/reports/api_slice_<key>.txt` | urllib, pandas, pyarrow |
-| `00b_force_rescan.py` | API slices (`draw`), the public API (`submit`, `collect`) | `data/forced/<run_id>/{draw.parquet, rescans.jsonl, collect.report.txt}`; then `data/base/forced_<run_id>.parquet` (+ `.assertions.parquet`, manifest) and `data/runs/<run_id>/cohort.parquet` (+ manifest), in 01a's and 01b's shapes | urllib, pandas, pyarrow |
+| `00b_force_rescan.py` | API slices (`static`, `draw`), the public API (`static`, `submit`, `collect`) | `data/forced/<run_id>/{static.jsonl, static.parquet, draw.parquet, rescans.jsonl, renders.jsonl, collect.report.txt}`; then `data/base/forced_<run_id>.parquet` (+ `.assertions.parquet`, manifest) and `data/runs/<run_id>/cohort.parquet` (+ manifest), in 01a's and 01b's shapes | urllib, pandas, pyarrow |
 | `00c_inject_known_good.py` | the public API (`draw`, `confirm`), VirusTotal (`confirm`) | `data/injected/<run_id>/{draw.parquet, renders.jsonl, confirm.jsonl, confirm.parquet, collect.report.txt}`; then `data/base/injected_<run_id>.parquet` (+ `.assertions.parquet`, manifest) and `data/runs/<run_id>/injected.parquet` (+ manifest), the injection arm in 01a's and 01b's shapes | urllib, pandas, pyarrow |
 | `01_extract.py` (01a) | Postgres | `data/base/<window>.parquet`, `.assertions.parquet`, `.control.parquet` (pending) + manifest | sqlalchemy, psycopg, pandas, pyarrow |
 | `01b_draw.py` | base | `data/runs/<run_id>/cohort.parquet` + manifest | pandas, pyarrow |
@@ -66,9 +66,14 @@ the label, engines by display name, no provenance and so no calibration — are 
 of [`12-api-slice-pilot.md`](./12-api-slice-pilot.md).
 
 **00b · forced rescans** ([`0014`](../decisions/0014-forced-rescans-for-the-training-arm.md)).
-Three resumable phases over an API slice of a month already `horizon_days` old: `draw` bands
+Four resumable phases over an API slice of a month already `horizon_days` old: `static`
+reads each frame file's layout fields from the index (one cached JSONL line per file) and
+writes `static.parquet`, the table that says which files are memory images
+([`0017`](../decisions/0017-memory-images-are-not-training-material.md)); `draw` bands
 every scanned-first file at T, leaves out files over the rescan route's size cap
-(`--max-size-bytes`, decided by the index's `artifact.size`) and draws the cohort per §9
+(`--max-size-bytes`, decided by the index's `artifact.size`) and the memory images (the
+static table, plus `--confirmed-memory-images`, a list a byte-level check produced; it
+exits when the table does not cover the frame) and draws the cohort per §9
 (`pi_draw` beside the slices' `pi_base`; the product is `pi`); `submit` POSTs one rescan per
 file through `/v3/consumer/submission/<community>/rescan/sha256/<hash>` in a seeded random
 order, one JSONL line per file, so a run cut short is a random subsample and a killed run
@@ -79,8 +84,12 @@ unchanged. The files it drops are counted by status (`not_submitted`, `missing_r
 `failed`, `pending`, `no_assertions`) and never back-filled by `collect`; because the draw is
 the head of a fixed per-band permutation, re-running `draw` after a frame rule tightens
 keeps every file still in frame and appends the next in order, and `submit` and `collect`
-resume over the same logs. Contract and deviations:
-[`12`](./12-api-slice-pilot.md) § Forced rescans.
+resume over the same logs. `draw --continues <run>` makes that top-up a new run: it exits
+unless every file the earlier run drew and that is still in frame is drawn again in its
+band, and it seeds the new run's `rescans.jsonl` and `renders.jsonl` with the earlier run's
+records of those files, so the earlier run's outputs stand and only the new files are
+rescanned. Contract and deviations: [`12`](./12-api-slice-pilot.md) § Forced rescans and
+§ Memory images are out of frame.
 
 **00c · the injection arm** ([`0015`](../decisions/0015-injection-arm-from-the-index-authenticode-and-virustotal.md)).
 Three resumable phases that fill §9's 5% known-good arm from files the platform already

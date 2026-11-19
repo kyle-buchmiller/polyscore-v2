@@ -2,10 +2,13 @@
 """Stage 00b — forced rescans: draw the cohort at T from API slices, rescan it, collect labels.
 
 Natural rescans cannot label a 10k cohort from the public community (specs/12 § Measured),
-so the pilot forces them (decisions/0014). Three phases, each resumable:
+so the pilot forces them (decisions/0014). Four phases, each resumable:
 
-  draw     band every scanned-first file of the slices at T, draw the cohort stratified per
-           SS9 with the seed (pi_draw recorded beside the slices' pi_base), write it.
+  static   read each frame file's layout fields from the index, one cached line per file, and
+           mark the memory images: they are not training material (decisions/0017).
+  draw     band every scanned-first file of the slices at T, leave the memory images out,
+           draw the cohort stratified per SS9 with the seed (pi_draw recorded beside the
+           slices' pi_base), write it. --continues RUN tops an earlier run up as a new one.
   submit   POST one rescan per drawn file through /v3/consumer/submission/<community>/rescan
            in a seeded random order, so a partial run is a random subsample; one line per
            file in rescans.jsonl, so a killed run continues where it stopped.
@@ -15,7 +18,8 @@ so the pilot forces them (decisions/0014). Three phases, each resumable:
            reads: a base + its assertions (01a's shape) and the run cohort (01b's shape), so
            02 -> 09 run unchanged.
 
-Writes: data/forced/<run_id>/{draw.parquet, rescans.jsonl, renders.jsonl, collect.report.txt}
+Writes: data/forced/<run_id>/{static.jsonl, static.parquet, draw.parquet, rescans.jsonl,
+        renders.jsonl, collect.report.txt}
         data/base/forced_<run_id>.parquet (+ .assertions.parquet, manifest)
         data/runs/<run_id>/cohort.parquet (+ manifest)
 Contract: specs/12-api-slice-pilot.md § Forced rescans; specs/04-pipeline.md stage 00b.
@@ -36,7 +40,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from polyscore_v2.api_source import ApiClient  # noqa: E402
+from polyscore_v2.api_source import ApiClient, hash_batches  # noqa: E402
 from polyscore_v2.config import (  # noqa: E402
     CONSENSUS_MALICIOUS,
     CONTESTED_LOWER,
@@ -45,9 +49,19 @@ from polyscore_v2.config import (  # noqa: E402
     STRATUM_TARGETS,
     settings,
 )
-from polyscore_v2.draw import check_draw, stratified_draw  # noqa: E402
+from polyscore_v2.draw import assign_stratum, check_draw, stratified_draw  # noqa: E402
 from polyscore_v2.io import read_snapshot, write_snapshot  # noqa: E402
 from polyscore_v2.logging_setup import configure  # noqa: E402
+from polyscore_v2.memory_image import (  # noqa: E402
+    REASONS,
+    STATIC_INCLUDE,
+    absent,
+    classify,
+    frame_reasons,
+    read_confirmed,
+    to_frame,
+    trim,
+)
 from polyscore_v2.runs import fresh  # noqa: E402
 
 VERDICT = {"malicious": True, "benign": False}
@@ -61,6 +75,8 @@ DEVIATIONS = [
     "bands at draw time used the index's detections.total; the base's n_definite is the render's"
     " count of non-null verdicts, which can differ by one or two",
     "files over the rescan route's size cap are out of frame: the public API refuses them under this key",
+    "memory images are out of frame, told by the index's layout fields: a dump saved in file layout"
+    " at a default base is not seen",
 ]
 STOP_STATUSES = (401, 402, 403)
 
@@ -73,10 +89,24 @@ def _now() -> pd.Timestamp:
     return pd.Timestamp(dt.datetime.now(dt.UTC))
 
 
-# ----------------------------------------------------------------------------- draw
+# ----------------------------------------------------------------------------- the frame
 
 
-def cmd_draw(a: argparse.Namespace, log) -> None:
+@dataclasses.dataclass(frozen=True)
+class Frame:
+    """The files a draw may take before the memory-image rule, and what the slices say of them."""
+
+    files: pd.DataFrame
+    slice_hashes: list[str]
+    window: tuple[str, str]
+    pi_base: float
+    slice_rows: int
+    scanned_rows: int
+    over_cap: int
+    now: pd.Timestamp
+
+
+def _frame(a: argparse.Namespace) -> Frame:
     slices = [read_snapshot(Path(p)) for p in a.slice]
     windows = {(m["window_start"], m["window_end"]) for _, m in slices}
     if len(windows) != 1:
@@ -99,8 +129,7 @@ def cmd_draw(a: argparse.Namespace, log) -> None:
     # rather than drawn and lost; an unknown size stays in.
     under_cap = ~(df["size"] > a.max_size_bytes)
     keep = scanned & in_age & under_cap
-    over_cap = int((scanned & in_age & ~under_cap).sum())
-    frame = pd.DataFrame(
+    files = pd.DataFrame(
         {
             "sha256": df.loc[keep, "sha256"],
             "instance_number": df.loc[keep, "first_instance"].astype("int64"),
@@ -116,6 +145,202 @@ def cmd_draw(a: argparse.Namespace, log) -> None:
             .astype(bool),
         }
     ).reset_index(drop=True)
+    return Frame(
+        files=files,
+        slice_hashes=[m["content_sha256"] for _, m in slices],
+        window=next(iter(windows)),
+        pi_base=pi_base,
+        slice_rows=int(len(df)),
+        scanned_rows=int(scanned.sum()),
+        over_cap=int((scanned & in_age & ~under_cap).sum()),
+        now=now,
+    )
+
+
+# ----------------------------------------------------------------------------- static
+
+
+def _read_static_cache(path: Path) -> dict[str, dict | None]:
+    """sha256 -> the trimmed index document, None when the index had none; the last line wins."""
+    docs: dict[str, dict | None] = {}
+    if path.exists():
+        with path.open() as fh:
+            for line in fh:
+                if line.strip():
+                    rec = json.loads(line)
+                    docs[rec["sha256"]] = rec["doc"]
+    return docs
+
+
+def cmd_static(a: argparse.Namespace, log) -> None:
+    out = fresh(_out(a.run_id, "static.parquet"), a.overwrite)
+    fr = _frame(a)
+    hashes = list(fr.files["sha256"])
+    cache = _out(a.run_id, "static.jsonl")
+    docs = _read_static_cache(cache)
+    todo = [h for h in hashes if h not in docs or (a.retry_absent and docs[h] is None)]
+    log.info(
+        "static", extra={"frame": len(hashes), "cached": len(hashes) - len(todo), "to_fetch": len(todo)}
+    )
+    calls = 0
+    if todo:
+        client = ApiClient(min_interval=1.0 / a.rate)
+        with cache.open("a") as fh:
+            for n, query in enumerate(hash_batches(todo, a.batch), 1):
+                found: dict[str, dict] = {}
+                for page, _ in client.metadata_pages(query, include=STATIC_INCLUDE, limit=a.batch):
+                    for doc in page:
+                        found[(doc.get("artifact") or {}).get("sha256")] = trim(doc)
+                for h in todo[(n - 1) * a.batch : n * a.batch]:
+                    docs[h] = found.get(h)
+                    fh.write(json.dumps({"sha256": h, "doc": docs[h]}, separators=(",", ":")) + "\n")
+                fh.flush()
+                if n % 100 == 0:
+                    done = min(n * a.batch, len(todo))
+                    log.info("static", extra={"done": done, "of": len(todo), "api_calls": client.calls})
+        calls = client.calls
+
+    static = to_frame([classify(docs[h]) if docs[h] else absent(h) for h in hashes])
+    layouts = {k: int(v) for k, v in static["layout"].value_counts().items()}
+    reasons = {r: int((static["reason"] == r).sum()) for r in REASONS if (static["reason"] == r).any()}
+    write_snapshot(
+        static,
+        out,
+        stage="00b_static",
+        run_id=a.run_id,
+        source="public-api",
+        slices=[str(p) for p in a.slice],
+        slice_content_sha256=fr.slice_hashes,
+        window_start=fr.window[0],
+        window_end=fr.window[1],
+        min_age_days=a.min_age_days,
+        max_age_days=a.max_age_days,
+        max_size_bytes=a.max_size_bytes,
+        frame_rows=int(len(static)),
+        include=list(STATIC_INCLUDE),
+        layouts=layouts,
+        memory_images=reasons,
+        read_at=fr.now.isoformat(),
+    )
+    print(
+        "\n".join(
+            [
+                f"forced static -- run {a.run_id}: {len(static)} frame files,"
+                f" {len(todo)} read from the index in {calls} calls",
+                "layout: " + ", ".join(f"{k}={v}" for k, v in layouts.items()),
+                "memory images: "
+                + (", ".join(f"{k}={v}" for k, v in reasons.items()) or "none")
+                + f"; {int(static['reason'].isna().sum())} files stay in frame",
+                f"written {out}",
+            ]
+        )
+    )
+
+
+# ----------------------------------------------------------------------------- draw
+
+
+def _write_whole(path: Path, text: str) -> None:
+    """All of the file or none of it: a log half-written would read as a finished one."""
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(text)
+    tmp.replace(path)
+
+
+def _check_continues(prev_id: str, fr: Frame, reason: pd.Series, cohort: pd.DataFrame) -> dict:
+    """Check this draw tops up an earlier run of the same slices; exits when it does not.
+
+    The draw is the head of a fixed permutation, so every file the earlier run drew that is
+    still in frame is drawn again in its band; a file that is not means the two draws differ.
+    """
+    prev, pm = read_snapshot(_out(prev_id, "draw.parquet"))
+    same_slices = sorted(pm["slice_content_sha256"]) == sorted(fr.slice_hashes)
+    if not same_slices or pm["random_seed"] != settings.random_seed:
+        sys.exit(f"run {prev_id} was drawn from other slices or under another seed: it cannot be continued")
+    why = dict(zip(fr.files["sha256"], reason, strict=True))
+    band_now = dict(zip(cohort["sha256"], cohort["stratum"], strict=True))
+    dropped: dict[str, int] = {}
+    broken = 0
+    for sha, band in zip(prev["sha256"], prev["stratum"], strict=True):
+        if band_now.get(sha) == band:
+            continue
+        if sha not in why:
+            key = "left_the_frame"
+        elif isinstance(why[sha], str):
+            key = why[sha]
+        else:
+            broken += 1
+            continue
+        dropped[key] = dropped.get(key, 0) + 1
+    if broken:
+        sys.exit(
+            f"{broken} files of run {prev_id} are still in frame and were not drawn again in their band:"
+            " the band edges, the floor or the cohort size differ, and this draw does not continue it"
+        )
+    again = len(prev) - sum(dropped.values())
+    return {
+        "run_id": prev_id,
+        "draw_content_sha256": pm["content_sha256"],
+        "earlier_drawn": int(len(prev)),
+        "drawn_again": int(again),
+        "dropped": dropped,
+        "new": int(len(cohort) - again),
+    }
+
+
+def _carry_over(prev_id: str, run_id: str, cohort: pd.DataFrame) -> dict:
+    """Seed this run's rescan log and render cache with the earlier run's records of its files."""
+    # The log's existence marks the seeding as done, so it is written last and never twice.
+    logp = _out(run_id, "rescans.jsonl")
+    if logp.exists():
+        return {"log_records_carried": None, "renders_carried": None}
+    drawn = set(cohort["sha256"])
+    recs = [r for r in _read_log(_out(prev_id, "rescans.jsonl")).values() if r["sha256"] in drawn]
+    t_instance = dict(zip(cohort["sha256"], cohort["instance_number"], strict=True))
+    wanted = {int(r["rescan_instance"]) for r in recs if r.get("rescan_instance") is not None}
+    wanted |= {int(t_instance[r["sha256"]]) for r in recs}
+    renders: dict[int, str] = {}
+    src = _out(prev_id, "renders.jsonl")
+    if src.exists():
+        with src.open() as fh:
+            for line in fh:
+                if line.strip():
+                    iid = json.loads(line)["instance"]
+                    if iid in wanted:
+                        renders[iid] = line if line.endswith("\n") else line + "\n"
+    _write_whole(_out(run_id, "renders.jsonl"), "".join(renders.values()))
+    _write_whole(logp, "".join(json.dumps(r) + "\n" for r in recs))
+    return {"log_records_carried": len(recs), "renders_carried": len(renders)}
+
+
+def cmd_draw(a: argparse.Namespace, log) -> None:
+    fr = _frame(a)
+    static_path = _out(a.run_id, "static.parquet")
+    if not static_path.exists():
+        sys.exit(f"{static_path} is missing: run the static phase over these slices first")
+    static, sm = read_snapshot(static_path)
+    if sorted(sm["slice_content_sha256"]) != sorted(fr.slice_hashes):
+        sys.exit("the static table was read for other slices: run the static phase over these")
+    confirmed: list[str] = []
+    confirmed_meta = None
+    if a.confirmed_memory_images:
+        confirmed, digest = read_confirmed(Path(a.confirmed_memory_images))
+        confirmed_meta = {
+            "path": str(a.confirmed_memory_images),
+            "listed": len(confirmed),
+            "content_sha256": digest,
+        }
+    try:
+        reason = frame_reasons(fr.files["sha256"], static, confirmed)
+    except ValueError as e:
+        sys.exit(str(e))
+    # A frame rule like the size cap: applied before the draw, so pi is over what remains.
+    out_of_frame = reason.notna()
+    removed = {r: int((reason == r).sum()) for r in REASONS if (reason == r).any()}
+    band_at_t = assign_stratum(fr.files["n_malicious"], fr.files["n_definite"])
+    removed_by_band = {k: int(v) for k, v in band_at_t[out_of_frame].value_counts().items()}
+    frame = fr.files[~out_of_frame].reset_index(drop=True)
+    now, pi_base, over_cap = fr.now, fr.pi_base, fr.over_cap
 
     cohort, reports = stratified_draw(
         frame, cohort_size=a.cohort_size, seed=settings.random_seed, min_definite=MIN_ANSWERING_ENGINES
@@ -139,8 +364,11 @@ def cmd_draw(a: argparse.Namespace, log) -> None:
     )
     cohort = cohort.assign(_o=order).sort_values("_o").drop(columns="_o").reset_index(drop=True)
 
+    continues = _check_continues(a.continues, fr, reason, cohort) if a.continues else None
     out = fresh(_out(a.run_id, "draw.parquet"), a.overwrite)
-    (w0, w1) = next(iter(windows))
+    if continues:
+        continues |= _carry_over(a.continues, a.run_id, cohort)
+    (w0, w1) = fr.window
     write_snapshot(
         cohort,
         out,
@@ -148,7 +376,7 @@ def cmd_draw(a: argparse.Namespace, log) -> None:
         run_id=a.run_id,
         source="public-api",
         slices=[str(p) for p in a.slice],
-        slice_content_sha256=[m["content_sha256"] for _, m in slices],
+        slice_content_sha256=fr.slice_hashes,
         window_start=w0,
         window_end=w1,
         pi_base=pi_base,
@@ -156,8 +384,14 @@ def cmd_draw(a: argparse.Namespace, log) -> None:
         max_age_days=a.max_age_days,
         max_size_bytes=a.max_size_bytes,
         over_cap_rows=over_cap,
-        slice_rows=int(len(df)),
+        slice_rows=fr.slice_rows,
+        frame_rows_before_memory_images=int(len(fr.files)),
         frame_rows=int(len(frame)),
+        memory_images_out_of_frame=removed,
+        memory_images_by_band_at_t=removed_by_band,
+        static_content_sha256=sm["content_sha256"],
+        confirmed_memory_images=confirmed_meta,
+        continues=continues,
         cohort_size_requested=a.cohort_size,
         band_edges={"lower": CONTESTED_LOWER, "upper": CONTESTED_UPPER, "consensus": CONSENSUS_MALICIOUS},
         min_definite=MIN_ANSWERING_ENGINES,
@@ -168,9 +402,13 @@ def cmd_draw(a: argparse.Namespace, log) -> None:
         deviations=DEVIATIONS,
     )
     lines = [
-        f"forced draw -- run {a.run_id}: {len(df)} slice rows, {int(scanned.sum())} scanned first,"
-        f" {len(frame)} in age [{a.min_age_days}, {a.max_age_days}) days and under {a.max_size_bytes} bytes"
+        f"forced draw -- run {a.run_id}: {fr.slice_rows} slice rows, {fr.scanned_rows} scanned first,"
+        f" {len(fr.files)} aged [{a.min_age_days}, {a.max_age_days}) days and under {a.max_size_bytes} bytes"
         f" ({over_cap} over the cap); pi_base = {pi_base:.6g}",
+        f"memory images out of frame: {int(out_of_frame.sum())} ("
+        + (", ".join(f"{k}={v}" for k, v in removed.items()) or "none")
+        + f"); {len(frame)} files stay",
+        "  by band at T: " + (", ".join(f"{k}={v}" for k, v in removed_by_band.items()) or "none"),
         f"{'stratum':20s} {'available':>9s} {'target':>7s} {'drawn':>6s} {'pi_draw':>8s}",
     ]
     for r in reports:
@@ -178,7 +416,18 @@ def cmd_draw(a: argparse.Namespace, log) -> None:
             f"{r.stratum:20s} {r.n_available:9d} {r.n_target:7d} {r.n_draw:6d} {r.pi:8.4f}"
             + ("  UNDER-FILLED" if r.underfilled else "")
         )
-    lines.append(f"cohort: {len(cohort)} files to rescan; written {out}")
+    if continues:
+        gone = ", ".join(f"{k}={v}" for k, v in continues["dropped"].items()) or "none"
+        lines.append(
+            f"continues run {continues['run_id']}: {continues['drawn_again']} of its"
+            f" {continues['earlier_drawn']} files drawn again, {continues['new']} new; dropped: {gone}"
+        )
+        if continues["log_records_carried"] is not None:
+            lines.append(
+                f"  carried over {continues['log_records_carried']} rescan records and"
+                f" {continues['renders_carried']} renders"
+            )
+    lines.append(f"cohort: {len(cohort)} files in the draw; written {out}")
     print("\n".join(lines))
 
 
@@ -546,20 +795,42 @@ def main() -> None:
     ap.add_argument("--overwrite", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    d = sub.add_parser("draw", help="band the slices at T and draw the cohort")
-    d.add_argument("--slice", action="append", required=True, help="an API slice parquet; repeat for a union")
-    d.add_argument("--cohort-size", type=int, default=settings.cohort_size)
-    d.add_argument(
+    # The frame's own rules, shared by the two phases that build it.
+    f = argparse.ArgumentParser(add_help=False)
+    f.add_argument("--slice", action="append", required=True, help="an API slice parquet; repeat for a union")
+    f.add_argument(
         "--min-age-days", type=int, default=settings.horizon_days, help="first scan at least this old"
     )
-    d.add_argument(
+    f.add_argument(
         "--max-size-bytes",
         type=int,
         default=33554432,
         help="the rescan route's artifact-size limit under this key; larger files are out of frame",
     )
-    d.add_argument(
+    f.add_argument(
         "--max-age-days", type=int, default=settings.horizon_max_days, help="and younger than this"
+    )
+
+    t = sub.add_parser(
+        "static", parents=[f], help="read the frame's layout fields and mark the memory images"
+    )
+    t.add_argument("--rate", type=float, default=3.0, help="index queries per second")
+    t.add_argument("--batch", type=int, default=50, help="files per index query")
+    t.add_argument(
+        "--retry-absent", action="store_true", help="ask again for files the index had no document for"
+    )
+
+    d = sub.add_parser("draw", parents=[f], help="band the slices at T and draw the cohort")
+    d.add_argument("--cohort-size", type=int, default=settings.cohort_size)
+    d.add_argument(
+        "--confirmed-memory-images",
+        metavar="FILE",
+        help="sha256 per line: files a byte-level check found to be memory images, out of frame too",
+    )
+    d.add_argument(
+        "--continues",
+        metavar="RUN",
+        help="an earlier run of the same slices that this draw tops up; its log and renders carry over",
     )
 
     s = sub.add_parser("submit", help="POST the rescans, resumably")
@@ -575,7 +846,7 @@ def main() -> None:
 
     a = ap.parse_args()
     log = configure()
-    {"draw": cmd_draw, "submit": cmd_submit, "collect": cmd_collect}[a.cmd](a, log)
+    {"static": cmd_static, "draw": cmd_draw, "submit": cmd_submit, "collect": cmd_collect}[a.cmd](a, log)
 
 
 if __name__ == "__main__":

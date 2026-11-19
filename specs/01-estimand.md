@@ -482,8 +482,18 @@ sampling decisions.
 
 **Which files may the model learn from?**
 
-**Every PE artifact PolySwarm holds inside the window — feeds included — plus §9's
-injection arm.** Deliberately broader than §1.
+**Every PE artifact PolySwarm holds inside the window that is a file as built — feeds
+included, memory images excluded — plus §9's injection arm.** Deliberately broader than §1.
+
+*Why memory images are out.* A memory image is a PE written out of a running process, not
+a file anyone built or shipped, and a sandbox submits one per process and per run. Half of
+run `forced-a` was copies of a handful of builds, and a model scored on them was scored on
+recognising a program it had already seen
+([`0017`](../decisions/0017-memory-images-are-not-training-material.md)). A near-identical
+variant of a program that was submitted as a file stays, as a row of its own. How the two
+are told apart is [`12`](./12-api-slice-pilot.md) § Memory images are out of frame; whether
+§1's number is offered for a memory image at all is open
+([`99`](./99-open-questions.md)).
 
 *Why it is a separate decision.* §1 answers *what the number is about*; this answers
 *what the model may see*. They are different objects and forcing them to coincide buys
@@ -583,7 +593,7 @@ matrix whole.
 
 ---
 
-**Estimand version:** `7` · frozen 2026-11-10 · unsigned
+**Estimand version:** `8` · frozen 2026-11-18 · unsigned
 
 | Version | Change |
 |---|---|
@@ -594,6 +604,7 @@ matrix whole.
 | 5 (2026-10-01) | §4 split into a natural-rescan training arm and a forced validation arm; §11 scale and reproducibility — [`0010`](../decisions/0010-natural-rescans-for-training-forced-for-validation.md) |
 | 6 (2026-11-03) | §9 band edges halved, consensus malicious at `m ≥ 0.5`; answering floor provisionally 10 — [`0012`](../decisions/0012-band-edges-halved.md) |
 | 7 (2026-11-10) | §3 the answer column reads movement, not the level at the horizon; §6 AUC per band at T; §8 the gate per band, with the coverage hold-out — [`0016`](../decisions/0016-convergence-label-and-within-band-gate.md) |
+| 8 (2026-11-18) | §10 memory images are out of the training population; on-disk variants of one program stay — [`0017`](../decisions/0017-memory-images-are-not-training-material.md) |
 
 **No results have been produced under any version**, so no version bump here has
 invalidated anything. That stops being true the moment stage 09 runs once.

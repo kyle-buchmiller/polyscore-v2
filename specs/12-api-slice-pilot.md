@@ -175,10 +175,12 @@ alternative to a separate rescanner recorded on DN-8721.
 The label the slice cannot provide is forced ([0014](../decisions/0014-forced-rescans-for-the-training-arm.md)).
 
 - **The frame** is every scanned-first file of one or more disjoint-prefix slices of one
-  window, aged `[horizon_days, horizon_max_days)` at draw time and no larger than the rescan
+  window, aged `[horizon_days, horizon_max_days)` at draw time, no larger than the rescan
   route's size cap under the pilot's key (`--max-size-bytes`, 32 MiB; the index records
   `artifact.size`, so the rule is applied before the draw and the manifest counts what it
-  removed). `pi_base` is the sum of the slices' inclusion probabilities (disjoint prefixes, so
+  removed) and not a memory image (§ Memory images are out of frame: `static` reads the
+  layout fields, `draw` applies the rule and its manifest counts what it removed by reason
+  and by band at T). `pi_base` is the sum of the slices' inclusion probabilities (disjoint prefixes, so
   the union is a sample too); the draw's `pi_draw` comes from `stratified_draw`, so a file the
   route would refuse is never drawn. The run cohort's `pi` is the **realized** share per
   band, labelled over available, so a file lost after the draw (a failed scan) lowers its
@@ -231,7 +233,11 @@ The label the slice cannot provide is forced ([0014](../decisions/0014-forced-re
   still in frame, in its band, and appends the next in order to fill the quota; `submit`
   skips what the log already holds and `collect` re-reads only what is missing. A
   replacement's label gap is its own age at its rescan, so a top-up made days later carries
-  a slightly longer gap, which the base records per row.
+  a slightly longer gap, which the base records per row. A top-up that must leave the
+  earlier run's outputs standing is drawn as a new run, `draw --continues <run>`: the draw
+  exits unless every file the earlier run drew and that is still in frame is drawn again in
+  its band, and it seeds the new run's `rescans.jsonl` and `renders.jsonl` with the earlier
+  run's records of those files, so `submit` posts the new files only.
 
 **Run `forced-a`, 2026-11-09, topped up 2026-11-10.** Drawn 9,500 from the two post-fix
 slices (`a1` + `a0`, π_base = 1/128): contested 4,500, leaning malicious 1,500, leaning clean
@@ -336,6 +342,119 @@ adjudicator reads `data/gold/forced-a/review.csv` — hash, portal link, empty v
 columns, shuffled, no group — against estimand §3; `draw.parquet` beside it holds the
 groups and probabilities for the import step. Kyle Buchmiller leads the adjudication; the
 written rubric and the grade-3 import are the next change.
+
+## Memory images are out of frame
+
+Decision [0017](../decisions/0017-memory-images-are-not-training-material.md). A memory
+image is a PE file written out of a running process: its sections sit at their mapped
+sizes, its image base is the address the loader chose and its import slots hold addresses.
+A sandbox submits one per process and per run, so one build arrives as hundreds of files
+that differ in a load address and a few bytes of data. They are not training material. A
+near-identical variant of a program that was submitted as a file is, and stays as a row of
+its own.
+
+**The rule** is a frame rule of stage 00b, applied before the draw like the size cap, so
+`pi` is over the files that remain. `static` reads nine index fields for every frame file
+(`artifact.{sha256, size}`, `pefile.sections.{raw_size, virtual_size, virtual_address}`,
+`pefile.is_dll`, `lief.entrypoint`, `exiftool.{entrypoint, petype}`), 50 files a query
+through `/v3/search/metadata/query`, one cached JSONL line per file, and
+`memory_image.classify` gives each file the first reason that applies:
+
+| Reason | The test | Pilot month, of 94,232 |
+|---|---|---|
+| `memory_layout` | every section that has bytes has `raw_size == virtual_size`, and either a raw size is off the 512-byte grid or the file ends exactly where the image does | 11,870 |
+| `runtime_base_64` | image base at or above `0x7FF000000000`, where 64-bit Windows loads images and no linker points; the base is `lief.entrypoint − exiftool.entrypoint` | 100 |
+| `relocated_exe_32` | a `PE32` EXE whose base is neither `0x400000` nor `0x10000000` | 864 |
+| `confirmed_from_bytes` | named in `--confirmed-memory-images`, the findings of a byte-level check | 3 |
+| `no_index_record` | the index returned no document for the hash | 0 |
+
+A file the analyzers could not lay out stays: the rule acts on evidence and never on a
+missing field (of the files that stay, 241 have no sections recorded, 2,826 a layout that
+is neither kind, and 200 no image base). `draw` exits when the static table does not cover
+the frame, and its manifest counts what the rule removed by reason and by band at T.
+
+**Why every frame file is read, and not only the ones the draw reaches.** Skipping memory
+images on the way down the permutation draws the same files and needs the fields of about
+a fifth of the frame. It also leaves `n_available` unknown in any band that fills before
+its end, and `pi_draw = n_draw / n_available` is the column no later stage can rebuild
+(estimand §9). The full read is 1,885 index queries and 21 minutes for the pilot month and
+bills no scan. A frame much larger than this one would want the walk, with `n_available`
+estimated from the share that passes and the error of that estimate recorded.
+
+**Checked against the bytes.** On the 200 gold-slice files of `forced-a`, read by DN-8811's
+prototype (LIEF, cross-checked with pefile), the index rule removes 136, every one a memory
+image by its bytes (130 by layout, 6 as relocated 32-bit EXEs), and none of the 45 files
+confirmed as built. Of the 64 it passes, 45 are confirmed as built, 16 give no verdict
+either way, and 3 are memory images saved back into file layout at a default base, which no
+index field shows. Those three are out by name:
+`data/forced/forced-b/confirmed_memory_images.txt` lists all 139. On `forced-a`'s cohort
+the rule reproduces the measurement behind 0017 file for file (4,617 of 9,500 out).
+
+**What the rule misses, and what it removes with them.** It is a floor: 3 of 64 passing
+files is about one kept contested row in twenty still a memory image, all three 32-bit. A
+byte-level pass over the 32-bit files of the draw would close it (4,770 files and 13.4 GB
+in `forced-b`) and is open in [99](./99-open-questions.md). And `relocated_exe_32` takes
+some files as built with the dumps: a 32-bit EXE linked at a custom base cannot be told
+from a relocated one in the index (864 frame files, 0.9%). The analyzer tag of DN-8811,
+which reads the import slots, replaces both compromises.
+
+**Where they sit.** Memory images are 14% of the pilot month's frame and were 49% of
+`forced-a`'s draw, because the draw over-samples the bands they arrive in: 7,656 of the
+11,799 frame files contested at T (65%), 3,062 of 4,550 leaning clean (67%), 909 of 2,280
+leaning malicious (40%), 1,077 of 73,245 consensus malicious (1.5%) and 86 of 2,139
+consensus clean (4%).
+
+**Run `forced-b`, 2026-11-18: `forced-a` topped up under the rule.** `static` read the
+94,232 frame files and every hash had a document. `draw --continues forced-a` left 12,837
+memory images out and drew 9,002 files from the 81,395 that stay: contested 4,143 of a
+4,500 quota, leaning malicious 1,371 of 1,500 and leaning clean 1,488 of 1,500, each band
+taken whole (`pi_draw` = 1) and under-filled; consensus malicious 1,000 of 72,168
+(`pi_draw` 0.0139) and consensus clean 1,000 of 2,053 (0.487). Of `forced-a`'s 9,500 files
+4,880 are drawn again, each in its band, with its rescan record and renders carried over;
+4,620 are gone (4,313 by layout, 269 relocated 32-bit EXEs, 35 by a 64-bit run-time base,
+3 by name). The 4,122 replacements (contested 2,564, leaning clean 1,034, leaning
+malicious 470, consensus clean 38, consensus malicious 16) were 42 to 72 days old at the
+draw, median 56.5. They were rescanned that evening at one a second (2026-11-19 02:50 to
+04:04 UTC): 4,120 accepted on the first pass, 2 timed out and, their scan histories showing
+no new scan, were accepted on a retry. **4,122 rescans, one per replacement.** The renders
+were read back in two passes behind the submission, 8,247 calls. Collected: 9,002 labelled
+of 9,002, 274,426 assertion rows; label gap p10 37.8, p50 51.5, p90 66.4, max 72.1 days,
+the replacements' gap running nine days longer than that of the rows they join; 13 definite
+verdicts at the label scan (p50) against 14 at T. Outputs: `data/forced/forced-b/`,
+`data/base/forced_forced-b.parquet` (+ assertions), `data/runs/forced-b/`. Run `forced-a`
+and its gold slice are untouched.
+
+**Stages 02 to 08 on `forced-b`, 2026-11-18.** 8,952 of the 9,002 rows are trainable under
+0016. The label counts by band are left out of this section while the gold slice of
+`forced-a` is under blind adjudication; they are in `data/runs/forced-b/labels.report.txt`.
+The temporal split holds train 5,371 and validate 1,343, with 2,238 rows in the gap and no
+test fold, as before. Baseline 3 within band on train + validate: clean 0.584, contested
+0.667, leaning malicious 0.524, consensus malicious 0.966, every gated band in §8's proceed
+range. The coverage probe holds no band out (clean 0.637, contested 0.700, leaning
+malicious 0.621); on `forced-a` it held the clean band out at 0.816. The models on validate,
+per band (clean / contested / leaning malicious): (a) 0.507 / 0.759 / 0.861, (b) 0.554 /
+0.787 / 0.882, (c) 0.567 / 0.887 / 0.874, (b_verdicts) 0.494 / 0.769 / 0.873, (b_random)
+0.734 / 0.851 / 0.921, against the count's 0.537 / 0.640 / 0.520 on the same rows.
+
+**The noise band on `forced-b`** (5 repeats × 5 family-grouped folds over the 8,952
+trainable rows in 3,184 groups; (b) at C = 0.01, (c) at 7 leaves × 300 trees). Contested:
+count 0.684, (b) 0.833 (0.824..0.836), (c) 0.862 (0.852..0.873); gap over the count +0.149
+for (b), worst repeat +0.140, and +0.178 for (c), worst +0.168: **both clear**. Leaning
+malicious: count 0.533, (b) 0.888, (c) 0.893: both clear. Clean: count 0.576, (b) 0.566,
+which does not clear, and (c) 0.710, which does. Consensus malicious: 0.961 / 0.981 / 0.985,
+reported. Against `forced-a`, where memory images were half the rows, the count rises from
+0.581 to 0.684 and (b) from 0.701 to 0.833, and (c) is where it was (0.860, 0.862).
+
+**The same comparison with the copies of a program held together** (outside the pipeline:
+`~/dn-7927-pilot-scratch/forced_b_compare.py`, with stage 07b's fitting code; a program is
+the files that share a largest section and size, joined by fuzzy hash within 30). The 8,952
+trainable rows are 4,159 programs, 3,738 of them single files, and the ten largest hold
+2,717 rows: variants of files as built cluster too. Folds grouped by program, contested:
+(b) 0.840 and (c) 0.874, gaps +0.156 and +0.190. One row per program, 1,705 contested rows:
+count 0.642, (b) 0.747, (c) 0.823, gaps +0.105 and +0.181. Bootstrap by program: (b)
++0.157, 95% interval +0.088 to +0.191; (c) +0.194, +0.161 to +0.230. **The lead does not
+come from copies split across folds.** The temporal split still groups by 0011's stand-in
+key and leaves 41% of the contested validate rows with a twin program in train.
 
 ## The injection arm (`pipeline/00c_inject_known_good.py`)
 
