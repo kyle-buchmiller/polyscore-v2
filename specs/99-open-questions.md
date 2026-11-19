@@ -14,7 +14,11 @@ this file is what blocks us now.
   excluded, post-2026-09-08) actually yield 10,000 files in a sensible window? If not,
   which compromise — widen the window, or admit feed rows and record the skew?
 - **Gold slice ownership.** Who adjudicates the 200 files, against what written rubric,
-  and where do the labels live? Nothing in this repo produces grade-3 labels today.
+  and where do the labels live? Nothing in this repo produces grade-3 labels today. **Partly
+  decided 2026-11-12:** Kyle Buchmiller leads the adjudication; the 200 are drawn
+  (`03b_gold_draw.py`, [12 § Forced rescans](./12-api-slice-pilot.md)). Still open: the
+  written rubric beyond estimand §3's one sentence, the import that writes the verdicts
+  back as grade-3 rows, and a second adjudicator for the inter-analyst agreement below.
 - **Engine clustering.** The label rules require counting *independent clusters*, not
   engines. The similarity work exists in `polyscore-pipeline` but is orphaned; it needs
   porting or replacing.
@@ -152,6 +156,16 @@ only access.
 
 ## Blocking a real model
 
+- **Admitting the injection arm into a run.** Stage 00c writes the arm beside the cohort
+  ([12 § The injection arm](./12-api-slice-pilot.md), [0015](../decisions/0015-injection-arm-from-the-index-authenticode-and-virustotal.md))
+  and nothing downstream reads it yet. Owed, in one change: 03 labels an
+  `injected_known_good` row `benign` at grade 2 by attestation instead of `undecidable /
+  no_label_scan_assertions`; 06 fits the injected-vs-organic probe it reports as `n/a`
+  today (the §9 gate at 0.6 AUC); and every `1/pi` weight in 02, 05, 06, 07, 08 and 09
+  reads the arm's NaN as zero, so it trains and never counts in a prevalence or a
+  reweighted metric — one helper, six call sites. Whether the arm's clean rows should be
+  capped so they do not swamp the few flagged ones is the same decision.
+
 - **The provisional label restates the T band (measured 2026-11-10 on the forced
   cohort, [12 § Forced rescans](./12-api-slice-pilot.md)).** Baseline 3 scores 0.999 AUC
   on validate, estimand §8's stop. Under [0011](../decisions/0011-provisional-pilot-rules.md)
@@ -164,7 +178,15 @@ only access.
   the level at the label scan; a longer horizon (does the contested band resolve at 90 or
   180 days?); gold labels for the contested band (the 200-file slice above). Until one of
   these lands, no model trained on this run measures anything, and the incumbent cannot be
-  compared either.
+  compared either. **Decided 2026-11-10 by [0016](../decisions/0016-convergence-label-and-within-band-gate.md)**:
+  the answer column reads movement between the scans (growth is malicious, no growth is
+  benign, `stayed_contested` provisional) and the gate is scored within band — measured at
+  0.58 for the count and 0.84 for a model on engine identities in the contested band.
+  Implemented and rerun 2026-11-12 ([12 § Forced rescans](./12-api-slice-pilot.md)): the
+  count reads 0.577 in the contested band on train + validate and the models 0.73 on
+  validate; the noise band measured the same day (5 × 5 family-grouped folds) puts the
+  model's lead at +0.12 for (b) and +0.28 for (c) with the worst repeat still ahead, so
+  §8's proceed condition holds. The panel confirms the provisional negatives.
 - **A one-month window has no temporal test fold.** SS5's 30-day gap pushes
   `test_not_before` past the window's end (1,671 rows dropped in the gap, test n = 0); only
   the random grouped split has one. Either the frame spans three months or more (an earlier

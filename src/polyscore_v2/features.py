@@ -29,6 +29,17 @@ FORBIDDEN_AS_FEATURES = frozenset(
 )
 
 
+#: The coverage aggregates: how many engines answered at T, verdicts aside. With the
+#: per-engine `_responded` columns they are what stage 06's coverage probe fits and what
+#: stage 07's (b_verdicts) leaves out. see specs/01-estimand.md § 8 · Decision rule
+COVERAGE_AGGREGATES = frozenset({"n_responded", "n_definite", "n_benign", "n_unknown", "m_defined"})
+
+
+def coverage_columns(columns: list[str]) -> list[str]:
+    """The subset of `columns` that says who answered rather than what they said."""
+    return [c for c in columns if c.endswith("_responded") or c in COVERAGE_AGGREGATES]
+
+
 #: Columns stage 01 writes to describe *how the row was drawn* (estimand §9). They are
 #: not late — they are simply not properties of the file. As features they are perfect
 #: provenance detectors: `provenance` separates the injected known-good arm from organic

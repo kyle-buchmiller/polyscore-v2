@@ -25,6 +25,17 @@ def test_metrics_table_slices_by_provenance_and_stratum():
     assert math.isnan(none["s1_raw"]) and none["s1_n"] == 0
 
 
+def test_metrics_table_reads_per_band_when_the_frame_carries_it():
+    df = pd.DataFrame({"y": [0, 1, 0, 1, 0, 1], "pi": [1.0] * 6, "provenance": ["feed"] * 6,
+                       "stratum": ["contested"] * 6,
+                       "band_t": ["clean", "clean", "contested", "contested", "contested", "contested"]})
+    s = np.array([0.1, 0.9, 0.2, 0.8, 0.3, 0.7])
+    m = metrics_table(df, s)
+    assert list(m["per_band"]) == ["clean", "contested"]        # band order, not alphabetical
+    assert m["per_band"]["contested"] == {"auc": 1.0, "auc_reweighted": 1.0, "n": 4, "positives": 2}
+    assert "per_band" not in metrics_table(df.drop(columns="band_t"), s)
+
+
 def test_prob_metrics_reports_the_base_rate_it_must_beat():
     df = pd.DataFrame({"y": [1, 0, 0, 0], "pi": [1.0, 1.0, 1.0, 1.0]})
     m = prob_metrics(df, np.array([0.25, 0.25, 0.25, 0.25]))

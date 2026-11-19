@@ -41,7 +41,7 @@ import pandas as pd
 from polyscore_v2.calibration import Combiner
 from polyscore_v2.config import settings
 from polyscore_v2.logging_setup import configure
-from polyscore_v2.metrics import auc, fmt, metrics_table, prob_metrics, reliability
+from polyscore_v2.metrics import auc, fmt, fmt_bands, metrics_table, prob_metrics, reliability
 from polyscore_v2.modelling import design, raw_score
 from polyscore_v2.runs import load_run
 
@@ -80,6 +80,7 @@ def main() -> None:
         return f"{name:34s} {fmt(m['pooled_raw'])} {fmt(m['pooled_reweighted'])}   {fmt(m['s1_raw'])} {fmt(m['s1_reweighted'])}  (n={m['s1_n']})"
     out["baselines"]["3_engine_count"] = metrics_table(test, test["n_malicious"].to_numpy(dtype="float64"))
     L.append(row("3 malicious-engine count at T", out["baselines"]["3_engine_count"]))
+    L.append("      per band at T (SS6): " + fmt_bands(out["baselines"]["3_engine_count"].get("per_band")))
     if "incumbent_polyscore" in test.columns and test["incumbent_polyscore"].notna().any():
         out["baselines"]["4_incumbent"] = metrics_table(test, test["incumbent_polyscore"].fillna(0).to_numpy(dtype="float64"))
         L.append(row("4 incumbent PolyScore at T", out["baselines"]["4_incumbent"]))
@@ -109,6 +110,8 @@ def main() -> None:
         if m["per_stratum"]:
             L.append("      per stratum: " + ", ".join(f"{k}={fmt(v).strip()}" for k, v in m["per_stratum"].items())
                      + "   per provenance: " + ", ".join(f"{k}={fmt(v).strip()}" for k, v in m["per_provenance"].items()))
+        if m.get("per_band"):
+            L.append("      per band at T (SS6): " + fmt_bands(m["per_band"]))
 
     L.append("")
     if "b" in scores and "b_random" in scores:

@@ -35,14 +35,17 @@ types and will not silently turn a hash into a number.
 |---|---|---|---|
 | `00_api_slice.py` | public API (`/v3/search/metadata/query`) | `data/api_slice/<start>_<end>_<prefix>.parquet` + manifest, raw pages under `data/api_slice/.cache/`, `data/reports/api_slice_<key>.txt` | urllib, pandas, pyarrow |
 | `00b_force_rescan.py` | API slices (`draw`), the public API (`submit`, `collect`) | `data/forced/<run_id>/{draw.parquet, rescans.jsonl, collect.report.txt}`; then `data/base/forced_<run_id>.parquet` (+ `.assertions.parquet`, manifest) and `data/runs/<run_id>/cohort.parquet` (+ manifest), in 01a's and 01b's shapes | urllib, pandas, pyarrow |
+| `00c_inject_known_good.py` | the public API (`draw`, `confirm`), VirusTotal (`confirm`) | `data/injected/<run_id>/{draw.parquet, renders.jsonl, confirm.jsonl, confirm.parquet, collect.report.txt}`; then `data/base/injected_<run_id>.parquet` (+ `.assertions.parquet`, manifest) and `data/runs/<run_id>/injected.parquet` (+ manifest), the injection arm in 01a's and 01b's shapes | urllib, pandas, pyarrow |
 | `01_extract.py` (01a) | Postgres | `data/base/<window>.parquet`, `.assertions.parquet`, `.control.parquet` (pending) + manifest | sqlalchemy, psycopg, pandas, pyarrow |
 | `01b_draw.py` | base | `data/runs/<run_id>/cohort.parquet` + manifest | pandas, pyarrow |
 | `02_compose.py` | base (+ one run's cohort) | `data/reports/composition_<window>[_<run_id>].txt` | pandas |
 | `03_label.py` | run cohort + the base's assertions | `data/runs/<run_id>/labels.parquet`, `labels.report.txt` | pandas |
+| `03b_gold_draw.py` | run cohort + labels | `data/gold/<run_id>/draw.parquet` (+ manifest), `review.csv`, `hashes.txt` | pandas |
 | `04_features.py` | run cohort + assertions (+ optional static block) | `data/runs/<run_id>/features.parquet` (manifest carries the column groups) | pandas, numpy |
 | `05_split.py` | features + labels | `data/runs/<run_id>/splits/{train,validate,test}.parquet` (+ `*_random.parquet`), `splits.manifest.json` | pandas |
 | `06_baselines.py` | splits (not test) | `data/runs/<run_id>/reports/baselines.txt` (+ `.json`) | scikit-learn |
-| `07_train.py` | train + validate (+ random) | `data/runs/<run_id>/models/{a,b,c,b_random}.joblib`, `models.manifest.json` | scikit-learn, lightgbm |
+| `07_train.py` | train + validate (+ random) | `data/runs/<run_id>/models/{a,b,c,b_random,b_verdicts}.joblib`, `models.manifest.json` | scikit-learn, lightgbm |
+| `07b_noise_band.py` | features + labels (minus the test fold's rows) + 07's parameters | `data/runs/<run_id>/reports/noise_band.txt` (+ `.json`) | scikit-learn, lightgbm |
 | `08_calibrate.py` | validate + models | `data/runs/<run_id>/models/calibrator_<key>.joblib`, `combiner.json`, `calibration.manifest.json` | scikit-learn |
 | `09_evaluate.py` | models + calibrators + combiner + **test** | `data/runs/<run_id>/reports/evaluation.txt` (+ `.json`), `reliability.png`, `test_access.log` | scikit-learn, matplotlib |
 
@@ -78,6 +81,25 @@ the head of a fixed per-band permutation, re-running `draw` after a frame rule t
 keeps every file still in frame and appends the next in order, and `submit` and `collect`
 resume over the same logs. Contract and deviations:
 [`12`](./12-api-slice-pilot.md) § Forced rescans.
+
+**00c · the injection arm** ([`0015`](../decisions/0015-injection-arm-from-the-index-authenticode-and-virustotal.md)).
+Three resumable phases that fill §9's 5% known-good arm from files the platform already
+holds: `draw` queries the index for scanned-first PE files under the prefixes whose first
+scan has verdicts and whose lief tags say `verified` with signer organization Microsoft
+Corporation, and keeps `--candidates` of them, the files an engine flagged at T first and
+the rest in a seeded permutation; `confirm` fetches each candidate's first-scan render
+(the features, and the embedded certificate chain) and VirusTotal's file object, one JSONL
+line per file, paced for the key's hourly quota and capped per run by `--limit` (the daily
+one); `collect` admits a file on both attestations — VirusTotal's `Signed` with a
+`Microsoft Root` trust anchor, and ours: `verified`, not `chain-broken`, a Microsoft signer
+and a pinned Microsoft CA in the chain, pinned once seen in `--pin-min-files` confirmed
+chains — and writes the arm's base + assertions (feature role only; there is no label scan)
+and cohort (`stratum` and `provenance` `injected_known_good`, `pi` NaN). Every other
+candidate is counted by status (`chain_unpinned`, `ours_failed`, `vt_not_signed`,
+`vt_other_root`, `vt_unknown`, `render_missing`, `not_confirmed`) with its evidence in
+`confirm.parquet`. The arm is **not merged into the run cohort** by this stage: 02 → 09
+weight rows by `1/pi`, and admitting the arm is the change recorded in
+[`99`](./99-open-questions.md). Contract: [`12`](./12-api-slice-pilot.md) § The injection arm.
 
 **01 · extract — two tiers** ([`0010`](../decisions/0010-natural-rescans-for-training-forced-for-validation.md)).
 
@@ -152,11 +174,21 @@ neighbouring band, which would silently change the draw. No modelling. **Read it
 the real sample size is 200 and treating 10,000 as meaningful is a mistake that will
 propagate into every confidence interval.
 
-**03 · label.** Apply the [`03-labels.md`](./03-labels.md) rules at T+30. Write one of
-the **four** pilot labels per file with its grade, reason, source and horizon;
+**03 · label.** Apply the [`03-labels.md`](./03-labels.md) rules at the label scan:
+`labels.label_by_movement`, the movement rule of estimand §3
+([`0016`](../decisions/0016-convergence-label-and-within-band-gate.md)). Write one of the
+**four** pilot labels per file with its grade, reason, source and horizon;
 `assert_pilot_labels` refuses anything outside them, so a pre-collapse label cannot reach
-a split and silently join a class. Keep `undecidable` and `unwanted` rows in the file but
-flagged, so they are excluded from training and still counted in the report.
+a split and silently join a class. The reason vocabulary is the rule's: `consensus` and
+`grew` for a positive (`pup_family` and `dual_use` when the family routing sends it to
+`unwanted`), `stayed_clean`, `fell` and `stayed_contested` for a negative, `below_floor`
+and `thin_clean` for `undecidable`, `no_label_scan_assertions` when the base holds no
+label scan. A `provisional` flag marks the `stayed_contested` negatives, and **`band_t`**
+— the band the file's malicious share at T falls in: `clean`, `contested`,
+`leaning_malicious`, `consensus_malicious` — is written beside the label, because §6's
+metric and §8's gate are read per band. Keep `undecidable` and `unwanted` rows in the file
+but flagged, so they are excluded from training and still counted in the report, which
+also tabulates the labels by band.
 
 **Report the change decomposition**, via `labels.decompose_change`: flips, retractions,
 joined, left, and the turnover rate. The churn rate (§4) and the retraction signal are
@@ -172,6 +204,19 @@ reweighted one as a ceiling; quote the raw one when correcting the cohort's effe
 size. The per-stratum split is the cheap check that labelling tracks difficulty at all —
 `undecidable` spread evenly across bands means the rule is wrong.
 
+**03b · gold draw.** The 200-file gold slice of
+[`0004`](../decisions/0004-labels-time-separated-for-the-pilot.md) and
+[`03-labels.md`](./03-labels.md): drawn **at random** from the contested band at T, never
+by a model's score, in two equal groups — files whose detections accrued (`malicious`,
+reason `grew` or `consensus`) and files that stayed contested (the provisional negatives)
+— so both outcomes of the cheap label get checked. Every row's inclusion probability is
+recorded at draw time, the gold draw's own and its product with the cohort's `π`, because
+R3's rule is that an unrecorded one cannot be added later. Two outputs, kept apart on
+purpose: `draw.parquet` holds the group, the cheap label and the movement, for the import
+step; `review.csv` is the adjudicator's sheet — hash, portal link, empty verdict columns,
+shuffled, no group — so the judgement is blind to what the pipeline thinks. The verdicts
+come back as grade-3 rows beside the grade-1 ones; the import step is the next change.
+
 **04 · features.** Build the ~120 numeric columns from [`02-data.md`](./02-data.md).
 The engine-verdict columns pivot from the base's assertions Parquet. The PE static block
 comes **from OpenSearch in bulk** for artifacts in the post-September index — it is
@@ -182,7 +227,10 @@ the builder refuses anything stamped later than the scoring moment.
 
 **05 · split.** Sort by time, cut at the estimand's percentages, enforce the horizon
 gap, and ensure no family cluster straddles a boundary. Also write the random-split
-variant, clearly named as the optimistic one.
+variant, clearly named as the optimistic one. Every fold carries 03's `band_t` and
+`provisional` columns, and the stage refuses a run where 03's band disagrees with 04's
+`m` on a trainable row: both come from the same T assertions, so a disagreement means
+the two stages read different bases.
 
 > **The forced validation tranche is not a split of the training draw.** It is drawn
 > separately, blind to rescan history, and labelled by forced rescan — so it is the one
@@ -199,7 +247,17 @@ variant, clearly named as the optimistic one.
 
 **06 · baselines.** The four baselines from estimand §7, before any model exists. **The
 most informative half hour in the project**: baseline 3 tells you immediately whether
-the labels are a tautology, and it costs no model at all.
+the labels are a tautology, and it costs no model at all. **Read per band at T** (§6,
+[`0016`](../decisions/0016-convergence-label-and-within-band-gate.md)): the table gives
+each band's n, positives and the AUC of baselines 3, 3b and 4, the pooled table comes
+after it and is quoted nowhere. The baselines are not fitted, so the §8 reading uses
+**train + validate**, the largest frame the stage may see; the validate-only number is
+printed beside it because that is the frame 07 compares the models on, and a
+family-grouped fold of a few hundred rows can sit far from the larger number (measured
+on `forced-a`: the contested band's count reads 0.577 on 3,480 train + validate rows and
+0.362 on validate's 751, where three families hold more than half the rows). The verdict
+is per gated band — `clean`, `contested`, `leaning_malicious`; `consensus_malicious` is
+reported, not gated — and the contested band decides.
 
 **Plus the provenance probe**, which is a gate rather than a report: a classifier trained
 to predict `provenance` from the *feature set*. It runs **twice**, and both are blocking
@@ -209,6 +267,7 @@ above **~0.6 AUC**:
 |---|---|
 | injected known-good vs organic | the negative class is poisoned — the model can identify the upload batch rather than the file |
 | **feed vs customer** | §10's breadth is unsafe — provenance is a near-perfect proxy for the label once feeds are in, so the model would learn the ingestion path |
+| **coverage, per band** (a report, not a gate) | who answered at T — the per-engine `_responded` columns and the coverage aggregates, verdicts ignored — predicts the label inside the band above ~0.75 (§8): the features identify the file's source. The band is named `HELD OUT`; 07's `(b_verdicts)` is the model without those columns and the band's number is read from it |
 
 A failure is fixed in the **feature set**, never by raising the threshold. If it cannot be
 fixed, the fallback is narrowing the training frame back toward §1 and accepting a thinner
@@ -227,7 +286,14 @@ only check for that.
 **07 · train.** Exactly three comparisons — (a) logistic regression on the *old*
 one-column encoding, (b) the same model on the *new* two-column encoding, (c)
 gradient-boosted trees on the new encoding. Tune on validate only, against log loss or
-Brier — never a threshold metric like F1.
+Brier — never a threshold metric like F1. Two more fits ride along for the measurements
+that need them: `(b_random)`, (b) on the random split, which 09 prices memorisation
+against, and `(b_verdicts)`, (b) without the coverage features (`features.coverage_columns`),
+the model §8 quotes in a band 06's coverage probe held out. The logistic fits
+standardise their inputs: the bid columns sit near 10^15 NCT base units beside 0/1
+indicators, and an unscaled L2 fit over them collapses every coefficient toward zero
+(measured on `forced-a`: a coefficient norm of 3 × 10^-15, the model a constant with a
+residual ranking). Every validate AUC is printed per band at T beside the count at T.
 
 > Prediction worth recording before the run: (b) will land close to (c), and the gap
 > between (a) and (b) — an *encoding* change, not a model change — will dwarf both. If
@@ -256,6 +322,25 @@ Both corrections need `π_p`, and a deliberately composed training set cannot me
 that estimate comes from a separately drawn adjudicated sample (R3). Balancing does not
 avoid the label problem; it raises R3's priority.
 
+**07b · noise band.** The seed-reshuffle noise band of estimand §11 and
+[`05-evaluation.md`](./05-evaluation.md) § Process stability, in the form the base allows.
+The designed form — `stability_runs` run draws with different seeds, every model scored on
+the shared validation set — needs a base larger than its cohort; on a base that *is* its
+cohort (the forced rescans, every row drawn with `π = 1`) a new seed draws the same cohort
+and the temporal split is deterministic, so the spread would measure only LightGBM's own
+randomness. The stage therefore repeats a **family-grouped, label-stratified K-fold**
+`stability_runs` times over every trainable row outside the test fold, refits (b) and (c)
+per fold with 07's tuned parameters, and reads every number **per band at T on the
+out-of-fold scores**: the per-repeat AUC's mean, sd, min and max for the count at T and
+each model; the fold-level swing, which is what a single validate fold inherits; the gap
+over the count; and the per-artifact agreement of the scores across repeats (pairwise
+Spearman and mean absolute difference), as §11 asks. The count is not fitted, so it has one
+number per band and a swing. **A model clears the band** when its mean gap over the count
+is wider than its own min..max across repeats and its worst repeat still beats the count —
+§8's "beats baseline 3 by more than the noise band", made a test. A run with a larger base
+than its cohort runs the designed form instead; this stage is its stand-in and says so in
+its header.
+
 **08 · calibrate.** Fit two artefacts on **held-out** data — and on the **§1 subset of
 it**, reweighted by `1/π_i`, never the full training frame. Stage 01 drew broadly per §10;
 this is the stage that narrows back, and it is the line that keeps feeds out of the base
@@ -276,9 +361,9 @@ coefficients are expert-set **in log-odds** and the score carries
 `calibration: provisional`.
 
 **09 · evaluate.** Load the frozen models *and* the frozen calibrator and combiner, score
-the test split, print the primary metric beside all four baselines, and draw the
-reliability diagram with bootstrap confidence bands. **Fits nothing.** The width of the
-confidence bands is the finding.
+the test split, print the primary metric beside all four baselines — per band at T first
+(§6), the pooled number after — and draw the reliability diagram with bootstrap
+confidence bands. **Fits nothing.** The width of the confidence bands is the finding.
 
 ## Running
 

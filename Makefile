@@ -1,5 +1,6 @@
 .PHONY: help setup lock lint test clean \
-        slice force-draw force-submit force-collect pe-gate survey base extract compose compose-run draw label features split baselines train calibrate evaluate \
+        slice force-draw force-submit force-collect inject-draw inject-confirm inject-collect \
+        pe-gate survey base extract compose compose-run draw label gold-draw features split baselines train noise-band calibrate evaluate \
         all rehearsal
 
 VENV ?= .venv
@@ -26,6 +27,10 @@ PE_CONFIRMED    ?= data/pe_confirmed/$(ENV)_$(WINDOW_START)_$(WINDOW_END).txt
 EXTRACT_FLAGS   ?= --chunk-days 1 --timeout 1800s
 # BASELINES_FLAGS=--no-gate on stage, where the feed-vs-customer gate fails by construction
 BASELINES_FLAGS ?=
+# NOISE_FLAGS=--repeats N --folds K for the noise band; the default is settings.stability_runs x 5
+NOISE_FLAGS     ?=
+# GOLD_FLAGS=--per-group N --band <band> for the gold draw; the default is 100 per group from the contested band
+GOLD_FLAGS      ?=
 # CALIBRATE_FLAGS=--provisional until grade-3 labels exist
 CALIBRATE_FLAGS ?= --provisional
 # OVERWRITE=--overwrite to replace a stage's outputs; they are written once on purpose
@@ -38,6 +43,9 @@ SLICE_FLAGS     ?=
 # the forced-rescan run (step 0b): the slices to draw from, and the phase flags
 SLICES          ?= data/api_slice/2026-09-08_2026-10-08_a1.parquet data/api_slice/2026-09-08_2026-10-08_a0.parquet
 FORCE_FLAGS     ?=
+# the injection arm (step 0c): the sha256 prefixes of the candidate slice, and the phase flags
+INJECT_PREFIX   ?= a
+INJECT_FLAGS    ?=
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -77,6 +85,15 @@ force-submit:  ## step 0b.2: POST the rescans, resumably (FORCE_FLAGS=--limit 20
 force-collect:  ## step 0b.3: read the forced scans back; writes the base and the run cohort
 	$(PY) pipeline/00b_force_rescan.py $(OVERWRITE) collect $(FORCE_FLAGS)
 
+inject-draw:  ## step 0c.1: the Microsoft-signed, verified, scanned-first candidates under INJECT_PREFIX (needs POLYSCORE_API_KEY)
+	$(PY) pipeline/00c_inject_known_good.py $(OVERWRITE) draw $(foreach p,$(INJECT_PREFIX),--prefix $(p)) $(INJECT_FLAGS)
+
+inject-confirm:  ## step 0c.2: each candidate's render and VirusTotal signature check, resumably (needs POLYSCORE_VT_API_KEY)
+	$(PY) pipeline/00c_inject_known_good.py confirm $(INJECT_FLAGS)
+
+inject-collect:  ## step 0c.3: the trusted set, written as the arm's base and cohort
+	$(PY) pipeline/00c_inject_known_good.py $(OVERWRITE) collect $(INJECT_FLAGS)
+
 pe-gate:  ## step 1: the confirmed-PE hash list from OpenSearch, run inside the CLI pod
 	mkdir -p data/pe_confirmed
 	POD=$$(kubectl --context $(KUBE_CONTEXT) -n ai get pods -o name | grep artifact-index-cli-terminal); \
@@ -108,6 +125,9 @@ draw:  ## step 5 (01b): the run draw -- stratified, seeded, pi recorded; never t
 label:  ## step 6: attach the answer column
 	$(PY) pipeline/03_label.py $(OVERWRITE)
 
+gold-draw:  ## step 6b: the 200-file gold slice to adjudicate, drawn at random from the contested band (GOLD_FLAGS=--per-group N)
+	$(PY) pipeline/03b_gold_draw.py $(OVERWRITE) $(GOLD_FLAGS)
+
 features:  ## step 7: build the feature matrix (and the control sample's)
 	$(PY) pipeline/04_features.py $(OVERWRITE)
 
@@ -120,13 +140,16 @@ baselines:  ## step 9: the four baselines and the probes (BASELINES_FLAGS=--no-g
 train:  ## step 10: the three comparisons, tuned on validate
 	$(PY) pipeline/07_train.py $(OVERWRITE)
 
+noise-band:  ## step 10b: the seed-reshuffle noise band, per band at T (NOISE_FLAGS=--repeats N --folds K)
+	$(PY) pipeline/07b_noise_band.py $(NOISE_FLAGS)
+
 calibrate:  ## step 11: fit the calibrator and the combiner (CALIBRATE_FLAGS=--provisional until grade-3 labels)
 	$(PY) pipeline/08_calibrate.py $(CALIBRATE_FLAGS)
 
 evaluate:  ## step 12: open the test set, once -- deliberately not part of `all`
 	$(PY) pipeline/09_evaluate.py
 
-all: draw compose-run label features split baselines train calibrate  ## one run end to end from an existing base, stopping before evaluate
+all: draw compose-run label features split baselines train noise-band calibrate  ## one run end to end from an existing base, stopping before evaluate
 	@echo
 	@echo "Deliberately stopping before evaluate: the test set is opened once, by hand, with 'make evaluate'."
 

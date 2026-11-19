@@ -272,8 +272,153 @@ contested at the label scan for 3,890 of them, where [0011](../decisions/0011-pr
 labels 1,802 malicious on specific families and 2,015 undecidable; 133 went clean, of which
 24 are benign and 109 undecidable. The 3,664 undecidable rows are where the question lives.
 Every later number (models at 0.991 to 1.000 AUC, the provisional calibrators) is an
-artefact of that label and measures nothing; stage 09 was not run. The label rule is the
-next decision ([99](./99-open-questions.md)).
+artefact of that label and measures nothing; stage 09 was not run. The label rule became
+[0016](../decisions/0016-convergence-label-and-within-band-gate.md); the rerun under it
+follows.
+
+**Stages 03 to 08 on `forced-a` under 0016, 2026-11-12.** The movement rule labels 9,475 of
+9,500: malicious 2,861 (`consensus` 1,656, `grew` 1,205), benign 6,614 (`stayed_contested`
+5,279 — provisional —, `stayed_clean` 1,333, `fell` 2), unwanted 20, undecidable 5
+(`thin_clean`); 1,326 files grew by 0.15 or more and 630 crossed 0.5. By the band at T:
+clean 2,334 with 689 positives, contested 4,573 with 667, leaning malicious 1,508 with
+472, consensus malicious 1,085 with 1,033. The temporal split now holds train 5,680 and
+validate 1,118 (2,677 in the gap, test still empty), with the prevalence shifting from 0.42
+in train to 0.20 in validate: the positives sit early in the window — 23% of the contested
+files first scanned in the week of September 7 grew, 3% of those in the week of October 5
+— and two scans cannot say whether that is the horizon (62 days against 33) or a
+calendar effect; the T+90 and T+180 panel can. **Baseline 3 within band, read on
+train + validate: clean 0.673, contested 0.577, leaning malicious 0.625, consensus
+malicious 0.975** — every gated band in §8's proceed range, and the whole-cohort numbers
+reproduce 0016's table (0.727 / 0.581 / 0.589). On validate alone the count reads 0.487,
+0.362 and 0.586, the contested band *inverted*: its 751 rows are 106 family groups and three
+of them hold more than half, which is why the gate reads the larger frame. The coverage
+probe holds the clean band out (0.816; contested 0.669, leaning 0.693). The models on
+validate, per band (clean / contested / leaning malicious): (a) 0.392 / 0.701 / 0.662, (b)
+0.472 / 0.729 / 0.763, (c) 0.547 / 0.716 / 0.795, (b_verdicts) 0.397 / 0.731 / 0.757,
+(b_random) 0.878 / 0.800 / 0.840. **In the contested band the models beat the count by
+0.35 on the same frame** (0.73 against 0.36; 0.15 against the train + validate reading),
+which is the proceed condition up to the noise band §11's stability runs have not yet
+measured; the leaning band says the same on 61 rows; the clean band's number is not quoted
+(held out, and validate holds 9 positives there). Pooled, every model still prints 0.98:
+the consensus bands own it, as 0016 said. Two defects surfaced on the way and are fixed in
+the stages: the logistic fits ran unscaled over the bid columns (10^15 NCT base units)
+and had collapsed to a constant — under 0011's labels that still read 0.99 pooled — and
+the gate's frame had been validate alone. Stage 09 is not run: the temporal test fold is
+empty. Outputs: `data/runs/forced-a/{labels,features}.parquet`, `splits/`,
+`reports/baselines.{txt,json}`, `models/`; the 0011 outputs were not kept.
+
+**The noise band on `forced-a`, 2026-11-12** (`07b_noise_band.py`, 5 repeats × 5
+family-grouped, label-stratified folds over the 9,475 trainable rows in 2,410 groups; (b)
+at C = 0.1, (c) at 15 leaves × 100 trees, refit per fold). Per band, the per-repeat AUC on
+the out-of-fold scores, mean (min..max): **contested** — count 0.581, (b) 0.701
+(0.640..0.728), (c) 0.860 (0.840..0.869); gap over the count +0.120 for (b), worst repeat
++0.058, and +0.278 for (c), worst +0.259: **both clear**. Leaning malicious — count 0.589,
+(b) 0.846 (0.843..0.852), (c) 0.926 (0.917..0.933): both clear. Clean — count 0.727, (b)
+0.822, (c) 0.788: clear, and held out by the coverage probe all the same. Consensus
+malicious — 0.970 / 0.971 / 0.988, reported. The per-artifact ranking barely moves between
+repeats (Spearman 0.97 for both models). **The fold-level swing is the finding beside
+it**: a single fold of about 1,900 rows reads the contested count anywhere from 0.151 to
+0.706 and (c) from 0.712 to 0.901, which is the variance the 1,118-row validate fold
+inherited when it read the count at 0.362. Two readings of the same rule therefore sit on
+the record: the time-honest temporal split, where (b) and (c) tie near 0.72 in the
+contested band, and the time-mixed cross-validation, where (c) reaches 0.86 and (b) 0.70
+— the trees' extra lead is partly calendar structure the temporal split refuses, the same
+optimism (b_random) prices. The gate reads the temporal number for the level and the
+cross-validation for the band; §8's proceed condition holds on both.
+
+**The gold slice drawn, 2026-11-12** (`03b_gold_draw.py`, seed 20260922, from the contested
+band at T): 100 of the 667 files whose detections accrued (`grew` 76, `consensus` 24;
+`π_gold` 0.1499) and 100 of the 3,749 that stayed contested (`π_gold` 0.0267), the overall
+inclusion probability the product with the cohort's `π` (0.049–0.099 and 0.0088–0.0102).
+Horizon at the label scan 33 to 62 days, median 57; the two groups sit at the same level at
+T (median `m_t` 0.29 and 0.25) and differ in movement (median `Δm` +0.17 and +0.08). The
+adjudicator reads `data/gold/forced-a/review.csv` — hash, portal link, empty verdict
+columns, shuffled, no group — against estimand §3; `draw.parquet` beside it holds the
+groups and probabilities for the import step. Kyle Buchmiller leads the adjudication; the
+written rubric and the grade-3 import are the next change.
+
+## The injection arm (`pipeline/00c_inject_known_good.py`)
+
+Decision [0015](../decisions/0015-injection-arm-from-the-index-authenticode-and-virustotal.md).
+The index carries the lief analyzer's Authenticode result on every PE scan since DN-8374
+(`lief.signature_tags`, `lief.signer.{common_name, organization, sha1, sha256}`,
+`lief.signatures.certificates.{subject, is_ca, sha256, valid_to}`,
+`lief.signatures.chain_of_trust.chain_flags`), all mapped and queryable through
+`/v3/search/metadata/query`, though the search response does not render the `lief`
+subtree — the full instance render does, under `metadata[].tool == 'lief'`. The arm is a
+prefix slice of that: scanned-first PE files whose first scan has verdicts, `verified` among
+the tags, signer organization `Microsoft Corporation`. The candidate order is hardest-first
+(flagged by an engine at T), then a seeded permutation.
+
+**What `verified` means, and what it does not.** The tag says the file's digest matches
+the signed digest and the signer's signature checks against the embedded leaf certificate.
+The analyzer pins no CA bundle, so a self-made chain passes too, and its `chain_of_trust`
+checks validity dates *now*, so a timestamped Windows binary whose leaf has expired carries
+neither `chain-verified` nor `chain-broken` (`expired-at-scan` and `counter-signed` instead).
+Trust therefore comes from two independent checks, both required: VirusTotal's sigcheck
+verdict on the hash (`signature_info.verified == "Signed"`, trust anchor named
+`Microsoft Root …`, validated against the Windows trust store) and, on our side, `verified`
+without `chain-broken`, the Microsoft signer, and a **pinned Microsoft CA** in the embedded
+chain — a CA certificate seen in at least five chains that passed every other check, so
+that one file cannot vouch for its own issuer. The pinned certificates are listed in the
+arm's manifest (`pinned_cas`). VirusTotal's `known_distributors` and `trusted_verdict`
+markers are recorded, not required: both were absent on a genuine Windows DLL.
+**Nothing but the signature attestation is read from VirusTotal**: no detection count, no
+verdict, no engine result is stored or used (`03-labels.md` puts aggregator verdicts at
+grade 1; the arm's label is grade 2 by the modality of code signing).
+
+**Measured 2026-11-10** on a 1/256 slice of scanned-first PE files with verdicts (all first
+scanned in 2026, the analyzer being that new): 71 verified with a Microsoft signer
+(~18,000 platform-wide; 8 flagged by an engine at T), 669 verified with any signer
+(~171,000; 322 flagged). The first "Microsoft" candidate examined was signed by "Inspect
+Element Ltd" on an untrusted root — our query matched it, VirusTotal rejected it. The
+platform's own known-good catalogue is not a source: three catalogued PE documents on the
+same slice, all `commercial`, one with a real scan; a catalogued hash is declined at
+submission and blocked from rescans (artifact-index `specs/05-known-good.md`).
+
+**What the arm's rows carry.** Base rows in 01a's shape with `provenance` and `stratum`
+`injected_known_good`, the T scan's counts from the render, no label scan
+(`label_instance_number`, `label_moment`, `label_gap`, `label_polyscore` null), `pi` NaN;
+assertions in the `feature` role only. The run file is `data/runs/<run>/injected.parquet`,
+beside the cohort and not merged into it: every stage from 02 on weights by `1/pi`, and
+admitting the arm — an attested branch in 03, the injected-vs-organic probe in 06, NaN-safe
+weights — is the change recorded in [`99`](./99-open-questions.md). The quota: 500
+VirusTotal lookups a day and 240 an hour on the key in use, so `confirm` runs in daily
+slices and resumes.
+
+**Run `forced-a`, 2026-11-10.** Prefix `a` (1/16): 1,291 candidates in frame, 129 flagged
+at T; 600 carried into `confirm`, 129 flagged first. `confirm` fetched 480 renders and made
+480 VirusTotal lookups at 230 an hour (the day's quota; 120 candidates wait for the next
+slice). `collect`: **384 trusted**, 50 `vt_not_signed`, 41 `vt_unknown`, 4
+`chain_unpinned`, 1 `ours_failed`, 120 `not_confirmed`. The VirusTotal step did real
+work: the 50 it rejected all pass our query, and sigcheck names the reason — 38 chains
+"terminated in a root certificate which is not trusted by the trust provider", 5 "could
+not be built to a trusted root authority", 7 carry no verdict; their anchors are the leaf
+alone (20), "Microsoft Development Root Certificate Authority 2014" (11) and build-stamped
+test signers — and 35 of the 50 were flagged by an engine at T, against 86 of the 384
+trusted. The 41 unknown are files VirusTotal has never seen (8 flagged). The 4 unpinned
+chain through the original "Microsoft Code Signing PCA" to the 1997 "Microsoft Root
+Authority" or through the Windows Phone 2012 CA, each seen in one to three chains; the 1
+`ours_failed` render carries no lief signature data at all. **Pinned CAs, 11:** Microsoft
+Code Signing PCA 2024 (219 chains), Microsoft Code Signing PCA 2011 (83), Microsoft Windows
+Code Signing PCA 2024 (52), Microsoft Windows Production PCA 2011 (16), Windows Production
+PCA 2023 (12), Microsoft Windows Production PCA 2026 RSA2048-SHA256 (11), Microsoft Windows
+Third Party Component CA 2014 (9), Microsoft Code Signing PCA 2010 (9), Microsoft Code
+Signing PCA (5), Microsoft Windows Third Party Component CA 2013 (5), Microsoft Time-Stamp
+PCA (5; a counter-signature CA that `_ms_ca_certs` does not tell from a signing CA — no
+trusted row rests on it alone). **The trusted 384:** signer CN "Microsoft Corporation"
+169, ".NET" 169, "Microsoft Windows" 27, the hardware and software compatibility
+publishers 13, six others; first seen on VirusTotal 2013-01 to 2026-11, 304 of them in
+2026; VirusTotal's known-distributor marker on 33, its trusted verdict on 4. At T: 12 to
+15 definite verdicts (p10 to p90), 261 with no malicious verdict, 113 with one, 10 with
+two. Note that 123 trusted rows carry a malicious assertion in the full render where the
+search document's `first_scan.detections.malicious` is above zero for 86: the summary
+undercounts the render by 37 files here — DN-8723, `detections` computed once at reveal
+from an incomplete assertion set — and `flagged_at_t` reads the summary. Outputs:
+`data/base/injected_forced-a.parquet` (384 rows, 6,236 assertion rows),
+`data/runs/forced-a/injected.parquet`, `data/injected/forced-a/{confirm.parquet,
+collect.report.txt}`. Short of the 500 planned: the 120 waiting candidates yield about 96
+at this trust rate, so a 500-row arm needs a larger draw from the same frame.
 
 ## Relation to the other sources
 

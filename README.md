@@ -175,7 +175,9 @@ make label       # step 6 — attach the answer column
 make features    # step 7 — the feature matrix (and the control sample's)
 make split       # step 8 — temporal + family-grouped split, plus the random variant
 make baselines   # step 9 — the four baselines and the probes (BASELINES_FLAGS=--no-gate to report, not exit)
+make gold-draw   # step 6b — the 200-file gold slice to adjudicate, drawn at random from the contested band
 make train       # step 10 — the three comparisons, tuned on validate
+make noise-band  # step 10b — the seed-reshuffle noise band, per band at T (NOISE_FLAGS=--repeats N --folds K)
 make calibrate   # step 11 — the calibrator and combiner (CALIBRATE_FLAGS=--provisional until grade-3 labels)
 make evaluate    # step 12 — open the test set, once; deliberately NOT part of `all`
 

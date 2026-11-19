@@ -142,6 +142,36 @@ means. Excluding them from training does **not** exclude them from production �
 scores them anyway, having never seen one — so the rate is how that blind spot is sized.
 Re-expanding the taxonomy is a new estimand version, not a code change.
 
+### The pilot's answer column reads movement
+
+Engines accrue detections and almost never retract them — on run `forced-a` 5.6% of the
+verdicts present at both scans flipped, 276 of 11,226 flips toward benign — so a label
+that reads the *level* at the horizon restates the level at T: the count of malicious
+engines at T scored 0.999 AUC against it. The pilot's label therefore reads **movement**
+([`0016`](../decisions/0016-convergence-label-and-within-band-gate.md)), over the engines
+that gave a definite verdict at both scans so that turnover cannot pass for revision
+([`03-labels.md`](./03-labels.md) § What actually changes). With `m_L` the malicious share
+over the definite verdicts at the label scan and `Δm` the change in that share over the
+engines present at both:
+
+- **malicious** — consensus at the horizon (`m_L ≥ 0.5`), or growth: `Δm ≥ +0.15` (about
+  two engines at the median coverage of 15), or `m` across 0.5 from below. The family
+  routing of [`0011`](../decisions/0011-provisional-pilot-rules.md) still applies: a PUP or
+  dual-use family consensus is `unwanted`.
+- **benign** — no growth, and one of: stayed clean (`m_L ≤ 0.1` with at least ten
+  definite verdicts; reason `stayed_clean`), fell (`Δm ≤ −0.15`; `fell`), or stayed
+  contested (`stayed_contested`) — the last a **provisional** negative, the claim a rescan
+  at this horizon can support, and the one the T+90 and T+180 panel passes and the gold
+  slice revise.
+- **undecidable** — below the floor: fewer than `LABEL_MIN_DEFINITE` definite verdicts at
+  the label scan, or fewer than five engines present at both (`below_floor`); or a clean
+  reading (`m_L ≤ 0.1`) on fewer than ten definite verdicts (`thin_clean`), which is not
+  "stayed clean" and is not growth either.
+
+The positive class is unchanged for a file that reaches consensus. What changes is the
+negative class in the contested region, from "went clean", which does not happen within
+the horizon, to "did not converge", which the horizon can show. The grade stays 1.
+
 Full taxonomy, the fold map and the rate denominators in
 [`03-labels.md`](./03-labels.md).
 
@@ -270,7 +300,11 @@ performance was memorisation.
 
 **Which single number decides whether this worked?**
 
-**ROC-AUC**, always quoted next to the baselines in §7.
+**ROC-AUC**, always quoted next to the baselines in §7, and **per band at T** — clean
+(`m < 0.1`), contested (`0.1 ≤ m < 0.4`), leaning malicious (`0.4 ≤ m < 0.5`). The pooled
+number is owned by the two consensus bands, where a hash lookup had already answered, and
+sits near 1 under any sane label; it is reported after the bands, never as the headline
+([`0016`](../decisions/0016-convergence-label-and-within-band-gate.md)).
 
 Brier score and a reliability diagram are produced as well, but for the pilot they are
 a **process demonstration, not a result** — with derived labels, a calibration number
@@ -296,16 +330,27 @@ Printed first, always, so the model's number never appears alone.
 
 **What result makes us proceed, and what makes us stop?**
 
-- **Proceed** if baseline 3 lands in **0.85–0.95 AUC** — high enough that the labels
-  carry signal, low enough that they are not merely restating the features — **and**
-  the trained model beats it by more than the seed-reshuffle noise band.
-- **Stop and fix the labels** if baseline 3 exceeds **~0.97**. The answer column is a
-  near-copy of the input column and nothing downstream can measure anything.
-- **Stop and check the plumbing** if baseline 3 is near **0.5**. Something is
-  disconnected.
+Decided **per band at T** (§6), the contested band deciding
+([`0016`](../decisions/0016-convergence-label-and-within-band-gate.md)):
 
-A model that merely *ties* baseline 3 is a real and useful result: it says the rebuild's
-value lives in calibration and abstention rather than in ranking.
+- **Proceed** if, in the contested band, baseline 3 lands in **0.5–0.8 AUC** — the count
+  carries little where the count is similar by construction — **and** the trained model
+  beats it by more than the seed-reshuffle noise band. The clean and leaning-malicious
+  bands are reported the same way.
+- **Stop and fix the labels** if baseline 3 exceeds **~0.9** in any band the model is
+  trained on. The answer column is restating the input column inside the region where it
+  should not be able to.
+- **Stop and check the plumbing** if the model is near **0.5** in every band. Something is
+  disconnected.
+- **Hold out the coverage features** in a band where a model on the response pattern
+  alone — which engines answered at T, verdicts ignored — exceeds **~0.75**: the model is
+  identifying the file's source, not the file (§9's probe in its within-band form). That
+  band's number is not quoted until the probe passes.
+
+A model that merely *ties* baseline 3 within band is a real and useful result: it says the
+rebuild's value lives in calibration and abstention rather than in ranking. The first
+rule, pooled and with the stop at 0.97, fired on run `forced-a` at 0.999; the measurement
+that replaced it is in 0016.
 
 ## 9 · Sampling design
 
@@ -399,10 +444,13 @@ reported separately and never folded into a band by a noisy ratio.
 
 ### The injection arm
 
-The 5% known-good slice is **not drawn from PolySwarm.** It is externally sourced — NSRL
-joins against artifacts already held, vendor retractions, commodity package corpora,
-internal build artifacts — to cover a negative class the platform genuinely lacks (R9).
-Three rules contain it:
+The 5% known-good slice is **not selected by PolySwarm's engines.** Its attestation is
+external — NSRL joins against artifacts already held, a code-signing chain to a trusted
+root confirmed by a second validator ([0015](../decisions/0015-injection-arm-from-the-index-authenticode-and-virustotal.md)),
+vendor retractions, commodity package corpora, internal build artifacts — to cover a
+negative class the platform's own verdicts cannot supply (R9). The files themselves may be
+ones the platform already holds and scanned once; what makes a row "injected" is where its
+label comes from, never a later scan. Three rules contain it:
 
 1. **It never participates in prevalence estimation or `1/π_i` reweighting.** Its
    inclusion probability is undefined by construction. It anchors the feature space; it
@@ -535,7 +583,7 @@ matrix whole.
 
 ---
 
-**Estimand version:** `6` · frozen 2026-11-03 · unsigned
+**Estimand version:** `7` · frozen 2026-11-10 · unsigned
 
 | Version | Change |
 |---|---|
@@ -545,6 +593,7 @@ matrix whole.
 | 4 (2026-09-24) | §10 training population, separated from §1's reference population — [`0008`](../decisions/0008-training-population-is-broader-than-the-reference-population.md) |
 | 5 (2026-10-01) | §4 split into a natural-rescan training arm and a forced validation arm; §11 scale and reproducibility — [`0010`](../decisions/0010-natural-rescans-for-training-forced-for-validation.md) |
 | 6 (2026-11-03) | §9 band edges halved, consensus malicious at `m ≥ 0.5`; answering floor provisionally 10 — [`0012`](../decisions/0012-band-edges-halved.md) |
+| 7 (2026-11-10) | §3 the answer column reads movement, not the level at the horizon; §6 AUC per band at T; §8 the gate per band, with the coverage hold-out — [`0016`](../decisions/0016-convergence-label-and-within-band-gate.md) |
 
 **No results have been produced under any version**, so no version bump here has
 invalidated anything. That stops being true the moment stage 09 runs once.

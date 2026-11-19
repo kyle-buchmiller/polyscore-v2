@@ -1,6 +1,8 @@
 # 0011 — Provisional rules that let the pilot run end to end
 
-- **Status:** Proposed
+- **Status:** Proposed — item 1, the label rule, is superseded by
+  [0016](./0016-convergence-label-and-within-band-gate.md) (2026-11-10); its family routing
+  survives inside the new rule, and items 2–6 stand
 - **Date:** 2026-10-05
 - **Affects:** `src/polyscore_v2/labels.py`, `features.py`, `calibration.py`, `config.py`; `pipeline/03_label.py` … `09_evaluate.py`; `specs/04-pipeline.md`
 

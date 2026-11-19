@@ -6,13 +6,23 @@ threshold on the same scan's verdicts -- is what destroyed the 2023 model and is
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import dataclass, field
 from enum import IntEnum, StrEnum
 
 import pandas as pd
 
-from .config import LABEL_MIN_DEFINITE
+from .config import (
+    CONSENSUS_MALICIOUS,
+    CONTESTED_LOWER,
+    CONTESTED_UPPER,
+    LABEL_CLEAN_MAX,
+    LABEL_CLEAN_MIN_DEFINITE,
+    LABEL_GROWTH,
+    LABEL_MIN_BOTH,
+    LABEL_MIN_DEFINITE,
+)
 
 
 class Grade(IntEnum):
@@ -136,66 +146,109 @@ def family_class(family: str | None) -> str:
     return "generic"
 
 
-def label_at_horizon(
+#: The bands at T the metric and the gate are read in (estimand SS6, SS8; decisions/0016).
+#: The edges are SS9's; `clean` takes consensus-clean with it, `consensus_malicious` is
+#: reported and never gated, and the pooled number comes after the bands.
+BANDS_AT_T = ("clean", "contested", "leaning_malicious", "consensus_malicious")
+GATED_BANDS = ("clean", "contested", "leaning_malicious")
+
+#: A negative the horizon could not confirm: the file neither grew nor cleared. The T+90
+#: and T+180 panel confirms or revises it, and the reason column is how it is found again.
+PROVISIONAL_REASONS = frozenset({"stayed_contested"})
+
+
+def band_at_t(m_t: float | None) -> str | None:
+    """The band a file's malicious share at T falls in; None when nothing was definite."""
+    if m_t is None or (isinstance(m_t, float) and math.isnan(m_t)):
+        return None
+    if m_t < CONTESTED_LOWER:
+        return "clean"
+    if m_t < CONTESTED_UPPER:
+        return "contested"
+    if m_t < CONSENSUS_MALICIOUS:
+        return "leaning_malicious"
+    return "consensus_malicious"
+
+
+def _verdicts(history: pd.DataFrame, role: str) -> dict[str, bool | None]:
+    """Engine address -> True / False / None (answered "unknown"); absent means silent."""
+    part = history[history["scan_role"] == role]
+    return {a: (None if pd.isna(v) else bool(v))
+            for a, v in zip(part["author"], part["verdict"], strict=True)}
+
+
+def _share(verdicts) -> tuple[float, int]:
+    definite = [v for v in verdicts if v is not None]
+    return (sum(definite) / len(definite) if definite else math.nan), len(definite)
+
+
+def label_by_movement(
     history: pd.DataFrame,
     *,
     min_definite: int = LABEL_MIN_DEFINITE,
-    min_clusters: int = 3,
-    generic_discount: float = 0.5,
+    min_both: int = LABEL_MIN_BOTH,
+    growth: float = LABEL_GROWTH,
+    clean_max: float = LABEL_CLEAN_MAX,
+    clean_min_definite: int = LABEL_CLEAN_MIN_DEFINITE,
+    consensus: float = CONSENSUS_MALICIOUS,
 ) -> LabelResult:
-    """Apply the settling rules to one artifact's verdict history at T+horizon.
+    """The pilot's label from one artifact's verdicts at T and at the label scan: the
+    answer column reads movement, not the level (estimand SS3, decisions/0016).
 
     `history` holds the artifact's assertions at both moments: columns `scan_role`
     ('feature' = T, 'label' = the horizon scan), `author`, `verdict`, `malware_family`.
 
-    PROVISIONAL RULE (decisions/0011, Proposed) -- what the spec asks for, with stand-ins
-    for the three inputs that do not exist yet, each named in the result's `reason`:
+    With m_L the malicious share over the definite verdicts at the label scan and dm the
+    change in that share over the engines definite at BOTH scans, so that turnover cannot
+    pass for revision:
 
-      * clusters      -> engines. Until a vendor-cluster map exists, each engine is its own
-                         cluster, so `min_clusters` is a count of engines.
-      * specificity   -> `family_class`: a specific family weighs 1.0, a generic or absent
-                         one `generic_discount`. "Two specific names" and "six generic
-                         detections" both clear a bar of 3.0; three generic ones do not.
-      * stability     -> not assessed. Two scans cannot show oscillation; the row carries
-                         its change decomposition instead, and the churn re-check (SS4)
-                         is where stability becomes measurable.
+      malicious    m_L >= consensus (which is where a crossing of 0.5 lands), or
+                   dm >= growth; a PUP or dual-use family consensus routes to UNWANTED
+      benign       no growth: `fell` (dm <= -growth), `stayed_clean` (m_L <= clean_max on
+                   at least clean_min_definite verdicts), else `stayed_contested` -- the
+                   PROVISIONAL negative the T+90 and T+180 panel confirms or revises
+      undecidable  `below_floor` (fewer than min_definite definite at the label scan, or
+                   fewer than min_both definite at both), or `thin_clean` (a clean reading
+                   on fewer than clean_min_definite verdicts)
 
-    Retractions -- engines malicious at T and benign at the horizon -- are the strongest
-    negatives available (spec rule 5) and are what a BENIGN row's reason records.
+    The grade is 1, time-separated, whatever the reason.
     """
-    lab = history[history["scan_role"] == "label"]
-    at_t = {a: (None if pd.isna(v) else bool(v)) for a, v in
-            zip(history.loc[history["scan_role"] == "feature", "author"],
-                history.loc[history["scan_role"] == "feature", "verdict"])}
-    at_l = {a: (None if pd.isna(v) else bool(v)) for a, v in zip(lab["author"], lab["verdict"])}
+    at_t, at_l = _verdicts(history, "feature"), _verdicts(history, "label")
     change = decompose_change(at_t, at_l)
-
-    n_definite = int(lab["verdict"].notna().sum())
-    n_malicious = int((lab["verdict"] == True).sum())  # noqa: E712 -- nullable boolean
-    classes = [family_class(f) for f in lab.loc[lab["verdict"] == True, "malware_family"]]  # noqa: E712
-    weighted = sum(1.0 if c in ("specific", "pup", "dual_use") else generic_discount for c in classes)
+    m_t, n_definite_t = _share(at_t.values())
+    m_l, n_definite_l = _share(at_l.values())
+    both = [a for a, v in at_t.items() if v is not None and at_l.get(a) is not None]
+    m_t_both, _ = _share(at_t[a] for a in both)
+    m_l_both, _ = _share(at_l[a] for a in both)
+    delta = (m_l_both - m_t_both) if both else math.nan
+    lab = history[history["scan_role"] == "label"]
+    classes = [family_class(f) for f in lab.loc[lab["verdict"] == True, "malware_family"]]  # noqa: E712 -- nullable boolean
     evidence = {
-        "n_definite": n_definite, "n_malicious": n_malicious,
-        "m": (n_malicious / n_definite) if n_definite else float("nan"),
-        "weighted_malicious": weighted,
+        "n_definite": n_definite_l, "n_malicious": sum(1 for v in at_l.values() if v is True), "m": m_l,
+        "n_definite_t": n_definite_t, "n_malicious_t": sum(1 for v in at_t.values() if v is True), "m_t": m_t,
+        "band_t": band_at_t(m_t),
+        "n_both": len(both), "m_t_both": m_t_both, "m_l_both": m_l_both, "delta_m": delta,
         "n_specific": classes.count("specific"), "n_generic": classes.count("generic") + classes.count("none"),
         "n_pup": classes.count("pup"), "n_dual_use": classes.count("dual_use"),
         "flips": change.flips, "retractions": change.retractions,
         "joined": change.joined, "left": change.left, "stable": change.stable,
     }
     grade = Grade.TIME_SEPARATED
-    if n_definite < min_definite:
+    if n_definite_l < min_definite or len(both) < min_both:
         return LabelResult(Label.UNDECIDABLE, grade, "below_floor", evidence)
-    if n_malicious == 0:
-        return LabelResult(Label.BENIGN, grade, "retracted" if change.retractions else "no_detection", evidence)
-    if weighted >= min_clusters:
+    if m_l >= consensus or delta >= growth:
         if evidence["n_pup"] >= 2 and evidence["n_pup"] >= evidence["n_specific"]:
             return LabelResult(Label.UNWANTED, grade, "pup_family", evidence)
         if evidence["n_dual_use"] >= 2 and evidence["n_dual_use"] >= evidence["n_specific"]:
             return LabelResult(Label.UNWANTED, grade, "dual_use", evidence)
-        return LabelResult(Label.MALICIOUS, grade,
-                           "specific_families" if evidence["n_specific"] >= 2 else "generic_volume", evidence)
-    return LabelResult(Label.UNDECIDABLE, grade, "weak_consensus", evidence)
+        return LabelResult(Label.MALICIOUS, grade, "consensus" if m_l >= consensus else "grew", evidence)
+    if delta <= -growth:
+        return LabelResult(Label.BENIGN, grade, "fell", evidence)
+    if m_l <= clean_max:
+        if n_definite_l >= clean_min_definite:
+            return LabelResult(Label.BENIGN, grade, "stayed_clean", evidence)
+        return LabelResult(Label.UNDECIDABLE, grade, "thin_clean", evidence)
+    return LabelResult(Label.BENIGN, grade, "stayed_contested", evidence)
 
 
 @dataclass(frozen=True)

@@ -30,7 +30,7 @@ import pandas as pd
 
 from polyscore_v2.config import settings
 from polyscore_v2.io import read_snapshot
-from polyscore_v2.labels import Label
+from polyscore_v2.labels import Label, band_at_t
 from polyscore_v2.logging_setup import configure
 from polyscore_v2.runs import load_run, read_manifest
 from polyscore_v2.splits import (FOLDS, grouping_key, horizon_gap, prevalence, random_split,
@@ -51,12 +51,18 @@ def main() -> None:
 
     features, fm = read_snapshot(run.dir / "features.parquet")
     labels, _ = read_snapshot(run.dir / "labels.parquet")
-    df = features.merge(labels[["sha256", "label", "grade", "reason", "trainable", "horizon_days"]], on="sha256")
+    keep = ["sha256", "label", "grade", "reason", "trainable", "provisional", "horizon_days", "band_t"]
+    df = features.merge(labels[keep], on="sha256")
     if len(df) != len(features):
         raise SystemExit(f"{len(df)} rows after joining labels to {len(features)} feature rows")
     excluded = df[~df["trainable"]]
     df = df[df["trainable"]].copy()
     df["y"] = (df["label"] == str(Label.MALICIOUS)).astype("int8")
+    # 03's band and 04's m come from the same T assertions; a disagreement means the two
+    # stages read different bases, which no later stage could see.
+    disagree = int((df["band_t"] != df["m"].map(band_at_t)).sum())
+    if disagree:
+        raise SystemExit(f"{disagree} trainable rows where labels.band_t disagrees with features.m")
     df["scoring_moment"] = pd.to_datetime(df["scoring_moment"])
     df["group"] = grouping_key(df)
 
@@ -78,6 +84,8 @@ def main() -> None:
                 "excluded_by_label": excluded["label"].value_counts().to_dict(),
                 "group": "tlsh_cluster, else imphash, else modal_family (provisional, decisions/0011), else sha256",
                 "groups": {f: int(df.loc[df["fold"] == f, "group"].nunique()) for f in FOLDS},
+                "provisional_negatives": {f: int(df.loc[df["fold"] == f, "provisional"].sum())
+                                          for f in FOLDS},
                 "folds": {f: prevalence(df[df["fold"] == f]) for f in FOLDS},
                 "folds_random": {f: prevalence(df[df["fold_random"] == f]) for f in FOLDS},
                 "feature_groups": fm.get("groups"), "random_seed": settings.random_seed}

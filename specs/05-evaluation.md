@@ -42,6 +42,7 @@ both fits and measures cannot honour the rule above.
 |---|---|---|
 | Baseline table | what does trivial look like? | printed first, always |
 | ROC-AUC | does it rank bad above good? | compare to baseline 3, **not** to 0.5 |
+| **ROC-AUC per band at T** | does it rank where the count cannot? | **the headline (§6, 0016)**: clean, contested, leaning malicious, each beside baseline 3 in that band; the contested band decides; pooled after them, quoted nowhere |
 | Grouped vs random split | how much was memorisation? | the gap is the finding |
 | Reliability diagram | do the numbers mean what they say? | dots on the diagonal; a rehearsal at pilot scale |
 | Brier score | ranking and honesty together | report against the base-rate Brier |
@@ -60,7 +61,9 @@ is why the per-slice row is not optional.
 > not be able to report a good score, and only the sliced metric stops it.
 >
 > Quote pooled AUC nowhere. If a single number is needed, it is the one computed on §1's
-> population, reweighted by `1/π_i`.
+> population, reweighted by `1/π_i` — and, since
+> [`0016`](../decisions/0016-convergence-label-and-within-band-gate.md), inside the contested
+> band at T: pooled, the two consensus bands own the number under any sane label.
 
 ## Process stability — the seed-reshuffle noise band, made operational
 
@@ -81,6 +84,19 @@ whose membership is unstable — and is fixed in §9, not by picking the best se
 
 **Determinism is a separate check:** two runs with the **same** seed and base must produce
 byte-identical cohorts and models. Any difference is a pipeline bug.
+
+**On a base that is its own cohort** — the forced rescans of
+[`12`](./12-api-slice-pilot.md), every row drawn with `π = 1` — step 1 cannot vary: a new
+seed draws the same cohort and the temporal split is deterministic. Stage `07b_noise_band.py`
+is the same measurement in the form that base allows: `stability_runs` repeats of a
+family-grouped, label-stratified K-fold over every trainable row outside the test fold, the
+models refit per fold with 07's parameters, every number read **per band at T** on the
+out-of-fold scores (§6). The spread of a model's per-repeat AUC is its noise band; the
+fold-level swing is what a single validate fold inherits; a model clears the band when its
+mean gap over baseline 3 is wider than that spread and its worst repeat still beats the
+count. The per-artifact agreement across repeats (Spearman, mean absolute difference) is
+reported as step 3 asks. The stand-in measures partition noise, not draw noise: when a base
+larger than its cohort exists, the designed form runs and this one is retired.
 
 ## Three standing controls
 

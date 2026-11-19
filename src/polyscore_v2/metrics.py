@@ -16,6 +16,8 @@ import numpy as np
 import pandas as pd
 from sklearn.metrics import brier_score_loss, log_loss, roc_auc_score
 
+from .labels import BANDS_AT_T
+
 CUSTOMER = "customer"
 
 
@@ -32,7 +34,8 @@ def weighted_mean(x: np.ndarray, w: np.ndarray) -> float:
 
 
 def metrics_table(df: pd.DataFrame, score: np.ndarray, y_col: str = "y") -> dict:
-    """AUC pooled and on the SS1 slice, each raw and x 1/pi, plus per stratum and per provenance."""
+    """AUC pooled and on the SS1 slice, each raw and x 1/pi, plus per stratum and per
+    provenance -- and per band at T when the frame carries `band_t`, the SS6 headline."""
     y = df[y_col].to_numpy(); w = (1.0 / df["pi"]).to_numpy()
     out = {"pooled_raw": auc(y, score), "pooled_reweighted": auc(y, score, w)}
     cust = (df["provenance"] == CUSTOMER).to_numpy()
@@ -43,7 +46,21 @@ def metrics_table(df: pd.DataFrame, score: np.ndarray, y_col: str = "y") -> dict
                           ((s, (df["stratum"] == s).to_numpy()) for s in sorted(df["stratum"].unique()))}
     out["per_provenance"] = {p: auc(y[m], score[m]) for p, m in
                              ((p, (df["provenance"] == p).to_numpy()) for p in sorted(df["provenance"].unique()))}
+    if "band_t" in df.columns:
+        out["per_band"] = {}
+        for b in [b for b in BANDS_AT_T if (df["band_t"] == b).any()]:
+            m = (df["band_t"] == b).to_numpy()
+            out["per_band"][b] = {"auc": auc(y[m], score[m]), "auc_reweighted": auc(y[m], score[m], w[m]),
+                                  "n": int(m.sum()), "positives": int(y[m].sum())}
     return out
+
+
+def fmt_bands(per_band: dict | None, key: str = "auc") -> str:
+    """One line of per-band numbers: `contested 0.584 (n=912, pos=131)`, in band order."""
+    if not per_band:
+        return "no band_t column"
+    return ", ".join(f"{b} {fmt(v[key]).strip()} (n={v['n']}, pos={v['positives']})"
+                     for b, v in per_band.items())
 
 
 def prob_metrics(df: pd.DataFrame, prob: np.ndarray, y_col: str = "y") -> dict:

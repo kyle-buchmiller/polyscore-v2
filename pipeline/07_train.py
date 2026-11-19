@@ -7,10 +7,16 @@ Exactly three, tuned on validate only, against log loss -- never a threshold met
   (b) logistic regression, NEW two-column encoding
   (c) gradient-boosted trees (LightGBM), new encoding
 
-plus (b_random): (b) refitted on the random split, so stage 09 can price memorisation.
+plus (b_random): (b) refitted on the random split, so stage 09 can price memorisation, and
+(b_verdicts): (b) without the coverage features -- which engines answered and how many --
+the model estimand SS8 quotes in a band where stage 06's coverage probe says who answered
+predicts the label on its own.
 
 Prediction on record: (b) lands close to (c), and the gap between (a) and (b) -- an
 ENCODING change, not a model change -- dwarfs both.
+
+Every validate AUC is printed per band at T beside the count at T (SS6): the pooled
+number is owned by the consensus bands and decides nothing.
 
 No class_weight. No synthetic oversampling. The SS9 draw supplied balance reversibly;
 what it costs is paid back explicitly: the manifest records logit(pi_p) with pi_p the
@@ -36,10 +42,13 @@ import numpy as np
 import pandas as pd
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import log_loss
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
 
 from polyscore_v2.config import settings
+from polyscore_v2.features import coverage_columns
 from polyscore_v2.logging_setup import configure
-from polyscore_v2.metrics import metrics_table
+from polyscore_v2.metrics import fmt_bands, metrics_table
 from polyscore_v2.modelling import design, raw_score
 from polyscore_v2.runs import load_run, read_manifest
 
@@ -56,7 +65,10 @@ def fit_lr(train, val, columns):
     yt, yv, wv = train["y"].to_numpy(), val["y"].to_numpy(), (1.0 / val["pi"]).to_numpy()
     best = None
     for C in (0.01, 0.1, 1.0, 10.0):
-        m = LogisticRegression(C=C, max_iter=5000).fit(Xt, yt)      # no class_weight, by design
+        # Standardised: the bid columns sit near 1e15 NCT base units beside 0/1 indicators,
+        # and an unscaled L2 fit over them collapses every coefficient toward zero.
+        m = make_pipeline(StandardScaler(), LogisticRegression(C=C, max_iter=5000))  # no class_weight
+        m.fit(Xt, yt)
         loss = val_loss(m, Xv, yv, wv)
         if best is None or (not math.isnan(loss) and loss < best[1]):
             best = (m, loss, {"C": C})
@@ -93,11 +105,14 @@ def main() -> None:
     train, val = pd.read_parquet(splits / "train.parquet"), pd.read_parquet(splits / "validate.parquet")
     train_r, val_r = pd.read_parquet(splits / "train_random.parquet"), pd.read_parquet(splits / "validate_random.parquet")
 
+    coverage = set(coverage_columns(groups["features_new"]))
+    verdict_only = [c for c in groups["features_new"] if c not in coverage]
     specs = {
         "a": ("logistic regression, old one-column encoding", fit_lr, groups["features_old"], True, train, val),
         "b": ("logistic regression, new two-column encoding", fit_lr, groups["features_new"], True, train, val),
         "c": ("LightGBM, new two-column encoding", fit_lgbm, groups["features_new"], False, train, val),
         "b_random": ("(b) on the random split -- optimistic", fit_lr, groups["features_new"], True, train_r, val_r),
+        "b_verdicts": ("(b) without the coverage features (SS8)", fit_lr, verdict_only, True, train, val),
     }
     manifest = {"stage": "07_train", "run_id": run.run_id, "written_at": dt.datetime.now(dt.UTC).isoformat(),
                 "random_seed": settings.random_seed, "class_weight": None, "oversampling": None, "models": {}}
@@ -108,7 +123,9 @@ def main() -> None:
         "logit": float(np.log(pi_p / (1 - pi_p))) if 0 < pi_p < 1 else None,
         "note": "pi_p must come from an adjudicated sample (R3); this is the validate fold's reweighted prevalence",
     }
-    lines = [f"train -- run {run.run_id}: train n={len(train)}, validate n={len(val)}", ""]
+    count_bands = metrics_table(val, val["n_malicious"].to_numpy(dtype="float64")).get("per_band")
+    lines = [f"train -- run {run.run_id}: train n={len(train)}, validate n={len(val)}",
+             f"{'':11s}count at T on validate, per band: {fmt_bands(count_bands)}", ""]
     for key, (desc, fitter, columns, impute, tr, va) in specs.items():
         entry = {"description": desc, "n_features": len(columns), "n_train": int(len(tr)), "n_validate": int(len(va))}
         if tr["y"].nunique() < 2:
@@ -127,6 +144,8 @@ def main() -> None:
         lines.append(f"({key:8s}) {desc:48s} " + (
             f"val log loss {entry['validate_log_loss']:.3f}  AUC pooled {auc.get('pooled_reweighted', math.nan):.3f}"
             if "validate_log_loss" in entry else entry.get("skipped") or entry.get("failed", "")))
+        if "validate_auc" in entry:
+            lines.append(f"{'':11s}per band at T: {fmt_bands(auc.get('per_band'))}")
     lines += ["", f"provisional intercept shift logit(pi_p) = {manifest['intercept_shift_provisional']['logit']}"]
     (out_dir / "models.manifest.json").write_text(json.dumps(manifest, indent=2, default=str))
     print("\n".join(lines))

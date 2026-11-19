@@ -134,7 +134,10 @@ Two different mechanisms move `m`, and they are not interchangeable:
 
 Measured on six stage artifacts 2026-09-30: **5 verdict flips, 10 engines joined, 4 left.**
 Both are real and they are unevenly distributed — three artifacts saw no change at all,
-two changed purely by flips, and one changed purely by turnover.
+two changed purely by flips, and one changed purely by turnover. Measured on prod, run
+`forced-a` (9,500 files, label scans at a median of 54 days): **11,226 flips, 276 of them
+retractions; 3,609 engines joined, 19,813 left, 121,200 stable.** Turnover is larger than
+revision, and revision runs one way.
 
 **For the label, turnover is fine.** We want the best available assessment at the horizon,
 and more engines is a better assessment. The label does not care who supplied it.
@@ -150,7 +153,16 @@ coverage delta is recoverable per row and should be reported alongside the churn
 
 ## Producing the pilot's labels
 
-1. **Wait out the horizon**, then pull each artifact's verdicts again at T+30.
+1. **Rescan at the horizon** ([`0014`](../decisions/0014-forced-rescans-for-the-training-arm.md))
+   and **read the movement, not the level**
+   ([`0016`](../decisions/0016-convergence-label-and-within-band-gate.md); the rule is
+   estimand §3). Engines accrue and do not retract, so the level at the horizon is the level
+   at T plus growth and a label that reads it restates the features. Growth — `Δm ≥ +0.15`
+   over the engines present at both scans, or `m` across 0.5 — is `malicious`; no growth is
+   `benign`, firm when the file stayed clean or fell, **provisional** (`stayed_contested`)
+   when it stayed contested, to be confirmed by the T+90 and T+180 panel or revised by the
+   gold slice. A clean reading on fewer than ten definite verdicts is `undecidable`
+   (`thin_clean`): below the coverage at which `m` means anything, it is neither.
 2. **Count independent clusters, not engines.** Five detections are not five opinions if
    four of those vendors license the same signature feed. Three independent *clusters*
    is a far stronger bar at identical cost.
@@ -162,7 +174,9 @@ coverage delta is recoverable per row and should be reported alongside the churn
 5. **Mine the retractions.** A vendor that detected a file and later *stopped* is
    actively asserting "we were wrong." These are the strongest negatives available and
    they land exactly on the hard cases. The old extraction already pulls them and throws
-   the signal away.
+   the signal away. Measured on prod at 54 days they barely exist (276 of 11,226 flips),
+   which is why the negative class is defined by the absence of growth rather than by
+   retraction; a longer horizon may change that.
 6. **Carve out a gold slice** — even 200 files, hand-adjudicated against estimand §3,
    drawn **at random** rather than from the interesting end.
 

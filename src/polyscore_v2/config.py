@@ -16,7 +16,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 #: Bumped whenever specs/01-estimand.md sections 1-11 change; stamped onto every artefact
 #: a stage writes, so a result can always be traced to the rules it was produced under.
 #: The change log is the version table at the foot of specs/01-estimand.md
-ESTIMAND_VERSION = 6
+ESTIMAND_VERSION = 7
 
 #: --- estimand SS9: sampling design -------------------------------------------
 #: Target share of the draw per stratum, keyed by the name stage 01 writes into the
@@ -48,9 +48,30 @@ MIN_ANSWERING_ENGINES: int | None = 10
 #: Stage 06 rejects the draw above this. A classifier that can predict ``provenance``
 #: from the feature set is identifying the upload batch rather than the file.
 PROVENANCE_PROBE_MAX_AUC = 0.6
-#: PROVISIONAL (decisions/0011, Proposed): the fewest definite verdicts at the label scan
-#: for a grade-1 label to be issued at all. Below it the row is `undecidable/below_floor`.
+#: A band at T where the response pattern alone -- which engines answered, verdicts
+#: ignored -- scores above this has features that identify the file's source; its
+#: coverage features are held out and its number is not quoted. see specs/01-estimand.md § 8
+COVERAGE_PROBE_MAX_AUC = 0.75
+
+#: --- estimand SS3: the label reads movement (decisions/0016) ---------------------
+#: The fewest definite verdicts at the label scan for a grade-1 label to be issued at all,
+#: and the fewest engines definite at both scans for the change in m to mean anything.
 LABEL_MIN_DEFINITE = 5
+LABEL_MIN_BOTH = 5
+#: A move in m over the engines definite at both scans that counts as growth (malicious)
+#: or a fall (benign): two engines at the median both-scan coverage of 12.
+LABEL_GROWTH = 0.15
+#: "Stayed clean" is m at or below this at the label scan, on at least this many definite
+#: verdicts; a clean reading on fewer is `undecidable / thin_clean`.
+LABEL_CLEAN_MAX = 0.1
+LABEL_CLEAN_MIN_DEFINITE = 10
+
+#: --- estimand SS8: the gate, read per band at T ----------------------------------
+#: Baseline 3 inside this range in the contested band is the proceed condition (with the
+#: model beating it by more than the noise band); above the stop in any gated band, the
+#: label restates the features there. see specs/01-estimand.md § 8 · Decision rule
+BASELINE3_PROCEED = (0.5, 0.8)
+BASELINE3_STOP = 0.9
 
 #: Columns never mixed into a prevalence estimate: the injection arm has no inclusion
 #: probability by construction, so 1/pi is undefined for it.
@@ -74,6 +95,8 @@ class Settings(BaseSettings):
     #: The key is read from the environment only; it is never written anywhere by this code.
     api_url: str = "https://api.polyswarm.network/v3"
     api_key: str = Field(default="", validation_alias=AliasChoices("POLYSCORE_API_KEY", "POLYSWARM_API_KEY"))
+    #: VirusTotal, read by 00c for its signature check alone (decisions/0015); environment only.
+    vt_api_key: str = Field(default="", validation_alias=AliasChoices("POLYSCORE_VT_API_KEY", "VT_API_KEY"))
 
     # --- estimand SS1: reference population ---------------------------------
     # The frame the probability is ABOUT, and the frame the calibrator is fitted on.
@@ -134,10 +157,6 @@ class Settings(BaseSettings):
     train_frac: float = 0.60
     validate_frac: float = 0.15
     # test is the remainder, and is opened once -- see specs/05-evaluation.md
-
-    # --- labelling (specs/03-labels.md) -------------------------------------
-    min_independent_clusters: int = 3
-    heuristic_family_discount: float = 0.5
 
     # --- reproducibility ----------------------------------------------------
     random_seed: int = 20260922
