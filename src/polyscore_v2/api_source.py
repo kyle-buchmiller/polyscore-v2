@@ -7,6 +7,7 @@ can and cannot say about a scan: see specs/12-api-slice-pilot.md.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import random
@@ -14,6 +15,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+import zlib
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -60,6 +62,16 @@ def slice_query(prefix: str, start: str, end: str, *, pe_gate: bool = True) -> s
     if pe_gate:
         parts.insert(0, PE_GATE)
     return " AND ".join(parts)
+
+
+class _NoKeyOnRedirect(urllib.request.HTTPRedirectHandler):
+    """Follow a redirect without the API key: a download's target is object storage, not the API."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        new = super().redirect_request(req, fp, code, msg, headers, newurl)
+        if new is not None:
+            new.remove_header("Authorization")
+        return new
 
 
 @dataclass
@@ -151,6 +163,45 @@ class ApiClient:
             except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
                 return {"error": f"{type(e).__name__}: {e}", "http_status": None}
         return {"error": "retries exhausted", "http_status": None}
+
+    def download(self, sha256: str, *, max_bytes: int) -> tuple[str, bytes]:
+        """A file's bytes by sha256: ("ok", data), or why there are none and b"".
+
+        The API answers with a redirect whose address is itself a credential, so nothing
+        returned or logged here carries a URL. The content is checked against its name.
+        """
+        query = urllib.parse.urlencode({"community": self.community})
+        req = urllib.request.Request(
+            f"{self.base_url}/consumer/download/sha256/{sha256}?{query}",
+            headers={"Authorization": self.api_key, "User-Agent": "polyscore-v2-pilot/0.1"},
+        )
+        opener = urllib.request.build_opener(_NoKeyOnRedirect)
+        for attempt in range(self.retries + 1):
+            self._pace()
+            self.calls += 1
+            try:
+                with opener.open(req, timeout=self.timeout) as r:
+                    data = r.read(max_bytes + max_bytes // 100 + 4096)
+                    if r.headers.get("Content-Encoding") == "gzip":
+                        # Storage serves a file compressed; the cap is on the file itself.
+                        data = zlib.decompressobj(16 + zlib.MAX_WBITS).decompress(data, max_bytes + 1)
+            except urllib.error.HTTPError as e:
+                if e.code == 404:
+                    # A file catalogued as known good is withheld by design, under the same status.
+                    return ("withheld" if b"KNOWN_GOOD" in e.read(600) else "not_found"), b""
+                if e.code not in (429, 500, 502, 503, 504) or attempt == self.retries:
+                    return f"http_{e.code}", b""
+            except (urllib.error.URLError, TimeoutError, ConnectionError, zlib.error) as e:
+                if attempt == self.retries:
+                    return type(e).__name__, b""
+            else:
+                if len(data) > max_bytes:
+                    return "too_large", b""
+                if hashlib.sha256(data).hexdigest() != sha256:
+                    return "wrong_content", b""
+                return "ok", data
+            time.sleep(min(60.0, 2.0**attempt) * (1 + random.random()))
+        return "retries_exhausted", b""
 
     def metadata_pages(
         self,

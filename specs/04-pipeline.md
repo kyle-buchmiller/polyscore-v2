@@ -34,13 +34,13 @@ types and will not silently turn a hash into a number.
 | Stage | Reads | Writes | Libraries |
 |---|---|---|---|
 | `00_api_slice.py` | public API (`/v3/search/metadata/query`) | `data/api_slice/<start>_<end>_<prefix>.parquet` + manifest, raw pages under `data/api_slice/.cache/`, `data/reports/api_slice_<key>.txt` | urllib, pandas, pyarrow |
-| `00b_force_rescan.py` | API slices (`static`, `draw`), the public API (`static`, `submit`, `collect`) | `data/forced/<run_id>/{static.jsonl, static.parquet, draw.parquet, rescans.jsonl, renders.jsonl, collect.report.txt}`; then `data/base/forced_<run_id>.parquet` (+ `.assertions.parquet`, manifest) and `data/runs/<run_id>/cohort.parquet` (+ manifest), in 01a's and 01b's shapes | urllib, pandas, pyarrow |
+| `00b_force_rescan.py` | API slices (`static`, `bytes`, `draw`), the public API (`static`, `bytes`, `submit`, `collect`) | `data/forced/<run_id>/{static.jsonl, static.parquet, bytes.jsonl, screen.parquet, draw.parquet, rescans.jsonl, renders.jsonl, collect.report.txt}`; then `data/base/forced_<run_id>.parquet` (+ `.assertions.parquet`, manifest) and `data/runs/<run_id>/cohort.parquet` (+ manifest), in 01a's and 01b's shapes | urllib, pandas, pyarrow |
 | `00c_inject_known_good.py` | the public API (`draw`, `confirm`), VirusTotal (`confirm`) | `data/injected/<run_id>/{draw.parquet, renders.jsonl, confirm.jsonl, confirm.parquet, collect.report.txt}`; then `data/base/injected_<run_id>.parquet` (+ `.assertions.parquet`, manifest) and `data/runs/<run_id>/injected.parquet` (+ manifest), the injection arm in 01a's and 01b's shapes | urllib, pandas, pyarrow |
 | `01_extract.py` (01a) | Postgres | `data/base/<window>.parquet`, `.assertions.parquet`, `.control.parquet` (pending) + manifest | sqlalchemy, psycopg, pandas, pyarrow |
 | `01b_draw.py` | base | `data/runs/<run_id>/cohort.parquet` + manifest | pandas, pyarrow |
 | `02_compose.py` | base (+ one run's cohort) | `data/reports/composition_<window>[_<run_id>].txt` | pandas |
 | `03_label.py` | run cohort + the base's assertions | `data/runs/<run_id>/labels.parquet`, `labels.report.txt` | pandas |
-| `03b_gold_draw.py` | run cohort + labels | `data/gold/<run_id>/draw.parquet` (+ manifest), `review.csv`, `hashes.txt` | pandas |
+| `03b_gold_draw.py` | run cohort + labels; with `--continues`, the earlier run's and its gold draw | `data/gold/<run_id>/draw.parquet` (+ manifest), `review.csv`, `hashes.txt`; with `--continues`, `new_hashes.txt` | pandas |
 | `04_features.py` | run cohort + assertions (+ optional static block) | `data/runs/<run_id>/features.parquet` (manifest carries the column groups) | pandas, numpy |
 | `05_split.py` | features + labels | `data/runs/<run_id>/splits/{train,validate,test}.parquet` (+ `*_random.parquet`), `splits.manifest.json` | pandas |
 | `06_baselines.py` | splits (not test) | `data/runs/<run_id>/reports/baselines.txt` (+ `.json`) | scikit-learn |
@@ -66,15 +66,23 @@ the label, engines by display name, no provenance and so no calibration — are 
 of [`12-api-slice-pilot.md`](./12-api-slice-pilot.md).
 
 **00b · forced rescans** ([`0014`](../decisions/0014-forced-rescans-for-the-training-arm.md)).
-Four resumable phases over an API slice of a month already `horizon_days` old: `static`
-reads each frame file's layout fields from the index (one cached JSONL line per file) and
-writes `static.parquet`, the table that says which files are memory images
-([`0017`](../decisions/0017-memory-images-are-not-training-material.md)); `draw` bands
-every scanned-first file at T, leaves out files over the rescan route's size cap
-(`--max-size-bytes`, decided by the index's `artifact.size`) and the memory images (the
-static table, plus `--confirmed-memory-images`, a list a byte-level check produced; it
-exits when the table does not cover the frame) and draws the cohort per §9
-(`pi_draw` beside the slices' `pi_base`; the product is `pi`); `submit` POSTs one rescan per
+Five resumable phases over API slices of a month already `horizon_days` old. `static` is a
+survey the draw does not read: each frame file's layout fields from the index, one cached
+JSONL line per file, written as `static.parquet`. `bytes` reads the bytes of every file the
+draw needs, from a directory of samples outside the repo (`--samples`) or else through the
+API's download route, and caches what `image_bytes.read` finds in them, one JSONL line per
+file: memory images are not training material
+([`0017`](../decisions/0017-memory-images-are-not-training-material.md)) and only a file's
+bytes say whether it is one
+([`0018`](../decisions/0018-memory-images-are-told-from-the-bytes.md)). `draw` bands every
+scanned-first file at T, leaves out files over the rescan route's size cap
+(`--max-size-bytes`, decided by the index's `artifact.size`), and reads each band's fixed
+order from the top, passing over the memory images (and the files on `--reviewed`, a list
+of files a person found to be memory images) until the band's target is met; it exits when
+it needs a file `bytes` has not read, and writes `screen.parquet`, the verdict of every
+examined file, beside the cohort (`pi_draw` beside the slices' `pi_base`; the product is
+`pi`). `--top-up-slice` adds a slice that is read only after the others, for the bands they
+could not fill. `submit` POSTs one rescan per
 file through `/v3/consumer/submission/<community>/rescan/sha256/<hash>` in a seeded random
 order, one JSONL line per file, so a run cut short is a random subsample and a killed run
 resumes; `collect` reads the forced and the T instances back as full renders
@@ -225,6 +233,23 @@ purpose: `draw.parquet` holds the group, the cheap label and the movement, for t
 step; `review.csv` is the adjudicator's sheet — hash, portal link, empty verdict columns,
 shuffled, no group — so the judgement is blind to what the pipeline thinks. The verdicts
 come back as grade-3 rows beside the grade-1 ones; the import step is the next change.
+
+**A gold slice is topped up, not redrawn.** When files of a slice leave the frame,
+`03b --continues <run>` under the next run keeps the files of that run's slice that are
+still eligible, each in the group its label gives it now, and fills every group back up at
+random from the rest of its pool: a top-up on counts, never on performance
+([`01-estimand.md` § Augmentation](./01-estimand.md#augmentation)). A file reaches such a
+slice two ways and `pi_gold` counts both: `p_kept + (1 − p_kept) × p_new`. `p_kept` is
+`k / M`: of the `M` files of today's pool that were in the file's earlier pool, `k` were in
+the earlier slice, and given `k` they are a random `k` of the `M`. `p_new` is the group's
+new files over the files of today's pool that were not kept. A file new to the pool has
+`p_kept` 0, so the rows of one group no longer share one `pi_gold`. `carried_from` names
+the earlier run on a kept row, the manifest records `continues` and each group's counts,
+and `new_hashes.txt` lists the files that were not in the earlier slice. The adjudicator's
+sheet holds all the files, reshuffled. Only a plain draw is continued, and only while the
+earlier run's labels are the ones its draw read: the earlier pools are rebuilt from them
+and checked against the sizes that draw recorded. The draw itself is
+`src/polyscore_v2/gold.py`.
 
 **04 · features.** Build the ~120 numeric columns from [`02-data.md`](./02-data.md).
 The engine-verdict columns pivot from the base's assertions Parquet. The PE static block

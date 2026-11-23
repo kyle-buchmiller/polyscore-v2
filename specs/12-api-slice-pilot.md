@@ -178,11 +178,12 @@ The label the slice cannot provide is forced ([0014](../decisions/0014-forced-re
   window, aged `[horizon_days, horizon_max_days)` at draw time, no larger than the rescan
   route's size cap under the pilot's key (`--max-size-bytes`, 32 MiB; the index records
   `artifact.size`, so the rule is applied before the draw and the manifest counts what it
-  removed) and not a memory image (§ Memory images are out of frame: `static` reads the
-  layout fields, `draw` applies the rule and its manifest counts what it removed by reason
-  and by band at T). `pi_base` is the sum of the slices' inclusion probabilities (disjoint prefixes, so
-  the union is a sample too); the draw's `pi_draw` comes from `stratified_draw`, so a file the
-  route would refuse is never drawn. The run cohort's `pi` is the **realized** share per
+  removed) and not a memory image (§ Memory images are out of frame: `bytes` reads the
+  files the draw needs, `draw` passes over the memory images and its manifest counts them
+  by tell and by band at T). `pi_base` is the sum of the slices' inclusion probabilities
+  (disjoint prefixes, so the union is a sample too); the draw's `pi_draw` comes from
+  `screened_draw`, the share of each band it read, so a file the route would refuse or a
+  memory image is never drawn. The run cohort's `pi` is the **realized** share per
   band, labelled over available, so a file lost after the draw (a failed scan) lowers its
   band's π instead of vanishing; the manifest keeps the design's `pi_draw` and
   `excluded_after_draw` by band and reason. `pi_base` is a column, not a factor, as 01b's
@@ -237,7 +238,9 @@ The label the slice cannot provide is forced ([0014](../decisions/0014-forced-re
   earlier run's outputs standing is drawn as a new run, `draw --continues <run>`: the draw
   exits unless every file the earlier run drew and that is still in frame is drawn again in
   its band, and it seeds the new run's `rescans.jsonl` and `renders.jsonl` with the earlier
-  run's records of those files, so `submit` posts the new files only.
+  run's records of those files, so `submit` posts the new files only. When the slices
+  cannot fill a band, `--top-up-slice` adds a slice of the same window that is read only
+  after them (§ The walk, and a top-up slice).
 
 **Run `forced-a`, 2026-11-09, topped up 2026-11-10.** Drawn 9,500 from the two post-fix
 slices (`a1` + `a0`, π_base = 1/128): contested 4,500, leaning malicious 1,500, leaning clean
@@ -345,66 +348,416 @@ written rubric and the grade-3 import are the next change.
 
 ## Memory images are out of frame
 
-Decision [0017](../decisions/0017-memory-images-are-not-training-material.md). A memory
-image is a PE file written out of a running process: its sections sit at their mapped
-sizes, its image base is the address the loader chose and its import slots hold addresses.
-A sandbox submits one per process and per run, so one build arrives as hundreds of files
-that differ in a load address and a few bytes of data. They are not training material. A
-near-identical variant of a program that was submitted as a file is, and stays as a row of
-its own.
+Decisions [0017](../decisions/0017-memory-images-are-not-training-material.md) (they are not
+training material) and [0018](../decisions/0018-memory-images-are-told-from-the-bytes.md) (how
+they are told). A memory image is a PE file written out of a running process: its sections
+sit at their mapped sizes, its image base is the address the loader chose and its import
+slots hold addresses. A sandbox submits one per process and per run, so one build arrives
+as hundreds of files that differ in a load address and a few bytes of data. They are not
+training material. A near-identical variant of a program that was submitted as a file is,
+and stays as a row of its own.
 
-**The rule** is a frame rule of stage 00b, applied before the draw like the size cap, so
-`pi` is over the files that remain. `static` reads nine index fields for every frame file
-(`artifact.{sha256, size}`, `pefile.sections.{raw_size, virtual_size, virtual_address}`,
-`pefile.is_dll`, `lief.entrypoint`, `exiftool.{entrypoint, petype}`), 50 files a query
-through `/v3/search/metadata/query`, one cached JSONL line per file, and
-`memory_image.classify` gives each file the first reason that applies:
+**The rule** is a frame rule of stage 00b, applied in the draw like the size cap, so `pi` is
+over the files that remain. Whether a file is a memory image is read from the file's own
+bytes. `bytes` gets every file the draw needs, from a sample directory or else through
+`/v3/consumer/download/sha256/<hash>`, and `image_bytes.read` turns the bytes into facts: one
+cached JSONL line per file, keyed by the sha256 of the reader's source, so a changed rule
+reads every file again. `image_bytes.verdicts` gives each examined file one verdict:
 
-| Reason | The test | Pilot month, of 94,232 |
+| Verdict | When | Frame |
 |---|---|---|
-| `memory_layout` | every section that has bytes has `raw_size == virtual_size`, and either a raw size is off the 512-byte grid or the file ends exactly where the image does | 11,870 |
-| `runtime_base_64` | image base at or above `0x7FF000000000`, where 64-bit Windows loads images and no linker points; the base is `lief.entrypoint − exiftool.entrypoint` | 100 |
-| `relocated_exe_32` | a `PE32` EXE whose base is neither `0x400000` nor `0x10000000` | 864 |
-| `confirmed_from_bytes` | named in `--confirmed-memory-images`, the findings of a byte-level check | 3 |
-| `no_index_record` | the index returned no document for the hash | 0 |
+| `memory-image` | the file shows at least one tell of § Bytes decide, or is on the reviewed list | out |
+| `as-built` | no tell, and positive evidence that the bytes are as the linker left them | stays |
+| `no-evidence` | neither | stays |
+| `not-pe` | the reader does not take the bytes for a PE image, though the index did | stays |
 
-A file the analyzers could not lay out stays: the rule acts on evidence and never on a
-missing field (of the files that stay, 241 have no sections recorded, 2,826 a layout that
-is neither kind, and 200 no image base). `draw` exits when the static table does not cover
-the frame, and its manifest counts what the rule removed by reason and by band at T.
+A file whose bytes cannot be had is out as well (`no_bytes`): it cannot be shown to stay. The
+rule acts on evidence and never on its absence, so a file that shows nothing stays. The
+reader is `struct` and nothing else: no parser library, and nothing is executed. The
+downloads are live samples, kept read-only in a directory outside the repo (`--samples`),
+and a file already there is not fetched again.
 
-**Why every frame file is read, and not only the ones the draw reaches.** Skipping memory
-images on the way down the permutation draws the same files and needs the fields of about
-a fifth of the frame. It also leaves `n_available` unknown in any band that fills before
-its end, and `pi_draw = n_draw / n_available` is the column no later stage can rebuild
-(estimand §9). The full read is 1,885 index queries and 21 minutes for the pilot month and
-bills no scan. A frame much larger than this one would want the walk, with `n_available`
-estimated from the share that passes and the error of that estimate recorded.
+### Bytes decide
 
-**Checked against the bytes.** On the 200 gold-slice files of `forced-a`, read by DN-8811's
-prototype (LIEF, cross-checked with pefile), the index rule removes 136, every one a memory
-image by its bytes (130 by layout, 6 as relocated 32-bit EXEs), and none of the 45 files
-confirmed as built. Of the 64 it passes, 45 are confirmed as built, 16 give no verdict
-either way, and 3 are memory images saved back into file layout at a default base, which no
-index field shows. Those three are out by name:
-`data/forced/forced-b/confirmed_memory_images.txt` lists all 139. On `forced-a`'s cohort
-the rule reproduces the measurement behind 0017 file for file (4,617 of 9,500 out).
+Loading a program leaves traces a linker never writes, and so does the tool that writes the
+capture out. Any one tell makes a file a memory image. The counts are over the 27,293 frame
+files examined for run `forced-c`, which was drawn under `image_bytes.RULES_VERSION` 9;
+*alone* is the files that show no other tell. Version 13 gives every one of those files the
+same verdict and the same tells. It reads one more fact, a signature's digest, and changes
+only [what one file can say](#what-one-file-can-say).
 
-**What the rule misses, and what it removes with them.** It is a floor: 3 of 64 passing
-files is about one kept contested row in twenty still a memory image, all three 32-bit. A
-byte-level pass over the 32-bit files of the draw would close it (4,770 files and 13.4 GB
-in `forced-b`) and is open in [99](./99-open-questions.md). And `relocated_exe_32` takes
-some files as built with the dumps: a 32-bit EXE linked at a custom base cannot be told
-from a relocated one in the index (864 frame files, 0.9%). The analyzer tag of DN-8811,
-which reads the import slots, replaces both compromises.
+| Tell | What the bytes show | Files | Alone |
+|---|---|---|---|
+| `imports-resolved` | more than half of the import slots hold the address of a loaded module, and in at least four in five of the descriptors that hold addresses these cluster as one module's exports do; or at least four addresses stand in tables that are resolved beyond doubt | 7,830 | 548 |
+| `cookie-initialized` | the `/GS` security cookie is not the compiler's default and its complement sits beside it, as the C runtime leaves the pair at start-up | 392 | 3 |
+| `module-addresses-in-data` | writable data holds addresses inside a module the file's own bound import table places, outside the address tables and far more than chance puts there | 1,907 | 1,906 |
+| `relocations-other-base` | the values the relocation table points at miss the image at the header's base and fit it at one other base | 33 | 7 |
+| `imagebase-runtime` | a 64-bit `ImageBase` at or above `0x7FF000000000`, where Windows 8.1 and later load images and no linker points | 13,093 | 8 |
+| `imagebase-windows7-aslr` | a 64-bit EXE whose `ImageBase` is just below `0x100000000` or `0x140000000`, where Windows 7 puts a relocated EXE | 11 | 0 |
+| `sections-memory-layout` | every section that has bytes is stored at its RVA and at no less than its virtual size, `FileAlignment` is below `SectionAlignment`, and no byte other than zero follows the sections | 13,375 | 35 |
+| `content-memory-layout` | the content lies at the RVAs although the section table lists file offsets | 71 | 32 |
+| `section-table-wiped` | the section table's rows are declared and every one is zero | 45 | 2 |
+| `dump-tool-section` | a section named `.CAPE`, `.SCY` or `.mackt`, where CAPE, Scylla and ImpREC put the import table they rebuild | 188 | 0 |
+| `imports-rebuilt` | an import table rebuilt in a section added at the end: every descriptor named and without a lookup table, every address table in another section, the slots ordinals or names in the added section | 310 | 2 |
+| `section-size-is-address` | every section's virtual size holds the low 32 bits of `ImageBase + RVA`: one dump tool writes the address where the size belongs | 14 | 0 |
+| `entry-below-image` | 32-bit, and `ImageBase + AddressOfEntryPoint` wraps past 4 GiB, so the entry address lies below the image: a tool that lost the entry point wrote it | 16 | 0 |
+| `entry-not-stored` | the entry point lies in a section, past every byte the section table stores for it, in a file that holds every byte its table lists: a tool rebuilt the table around the bytes it had | 8 | 5 |
+| `uninitialized-section-filled` | a section flagged as uninitialised data and nothing else, or the section named `UPX0` when the entry point lies in it, holds content with a byte entropy under 7.5: a packed program left unpacked | 561 | 20 |
+| `exe-moved-unvouched` | a presumption, not a trace: below | 937 | 33 |
+| `same-build-other-base` | compares files: below | 13,667 | 0 |
+| `same-binding-other-addresses` | compares files: below | 4 | 4 |
 
-**Where they sit.** Memory images are 14% of the pilot month's frame and were 49% of
-`forced-a`'s draw, because the draw over-samples the bands they arrive in: 7,656 of the
-11,799 frame files contested at T (65%), 3,062 of 4,550 leaning clean (67%), 909 of 2,280
-leaning malicious (40%), 1,077 of 73,245 consensus malicious (1.5%) and 86 of 2,139
-consensus clean (4%).
+By kind, memory images are 7,265 of the 11,518 64-bit EXEs examined, 6,149 of the 6,553
+64-bit DLLs, 3,771 of the 8,325 32-bit EXEs and 124 of the 869 32-bit DLLs. The 17,300 files
+the rules take are 1,067 builds, and five builds hold 13,670 of them.
 
-**Run `forced-b`, 2026-11-18: `forced-a` topped up under the rule.** `static` read the
+**A base counts only when the loader could have written it**: not zero, a multiple of
+64 KiB, and below where user space ends (`0x7FFF0000`, or `0x7FFFFFFF0000` for 64-bit). The
+two base tells, the relocation tell and the presumption all need that.
+
+**How the import tables are read.** The directory is walked as the loader walks it,
+whatever its `Size` says: one descriptor after another up to the first that names no DLL or
+has no address table. A slot is an address when it lies in user space, above the image's
+own RVAs and outside the image. It is untouched when it equals its lookup-table entry or,
+where one table does both jobs, when it is an ordinal or the RVA of a name.
+
+- A descriptor that leads to no readable table voids the whole directory. Those bytes are
+  packed data or another file's content, and nothing read from them counts.
+- A descriptor with a time stamp whose slots hold addresses is *bound*. A binder writes
+  addresses too, so such a table cannot say who wrote it and is left out. The exception is
+  a 64-bit address at or above `0x7FF000000000`, which only the loader hands out.
+- A descriptor whose DLL name was erased counts only when its table is at least four slots
+  that are nothing but one module's distinct addresses.
+- A table is *resolved beyond doubt* when its descriptor is named and has no time stamp,
+  its lookup table holds nothing but ordinals and readable names, and its slots hold
+  nothing but one module's addresses. Four such addresses make the tell whatever the other
+  tables hold: a tool that adds imports to a file writes slots that would outvote the
+  loader's. 30 files show the tell this way only.
+- With no descriptor left and no bound-import directory, the address-table directory is
+  read as zero-separated runs. It counts when it holds at least eight addresses and every
+  run is one module's.
+- When no directory leads to a descriptor at all, the descriptors are searched for: a
+  module name (`.dll`, `.drv`, `.ocx`, `.exe`, `.sys`, `.cpl`) whose RVA stands in the
+  fourth field of a descriptor in the name's own section. A capture can lose its directory
+  and keep its tables; only tables resolved beyond doubt count there.
+- The lookup table sets the slot count, so a blanked address table, a decoy the loader
+  skips, shows its slots and is not resolved.
+- A walk that reads more than 131,072 words is dropped: no program imports that many, and
+  a crafted directory could otherwise cost seconds.
+
+**A rebuilt import table** is the work of a dump tool that could not keep the original:
+the directory sits in the last section (a trailing `.reloc` aside), every descriptor is
+named and has no lookup table, every address table lies in another section, and of four or
+more slots at least nine in ten are ordinals or RVAs into the directory's own section. A
+linker puts the names beside the tables; 302 of the 310 files also show a dump tool's
+section or an unpacked packer section, and none has a certificate or a valid checksum.
+
+**Module addresses in data.** A named descriptor with a time stamp and a forwarder chain
+of `0xFFFFFFFF` or a slot index is bound, and its addresses say where the module stood for
+the binder. The module's span is the longest run of those addresses whose neighbours lie
+under 1 MiB apart, when the run holds at least four addresses and three quarters of the
+table and is at most 16 MiB wide. The tell is at least five distinct aligned words in the
+writable sections that fall in a span, outside the address tables and not text, and at
+least 16 times as many as chance gives. A program writes a library's addresses into its
+data only while it runs. The tell rests on few programs here: the 1,907 files are 22
+builds, and two builds of one Visual Basic 6 program hold 1,814.
+
+**Relocation targets.** The first 4,096 entries of the relocation table are followed to
+the values they point at (`HIGHLOW`, and `DIR64` in a 64-bit file). A linker writes each
+for the header's base. The tell needs at least eight values read, fewer than a fifth of
+them inside the image at the header's base, and at least four in five inside one span of
+the image's size, rounded up to 64 KiB, that starts on another 64 KiB boundary. Values
+below the image's size are RVAs or nothing and are left out. Values that merely miss the
+image do not make it: one build keeps encoded values in its relocation slots.
+
+**Content at the RVAs** is shown in one of two ways. A section begins where bytes follow 32
+zero bytes: among the sections whose RVA and file offset differ, at least two and at least
+three in five begin at their RVA and at most one in three at their file offset, an offset
+that is one section's RVA and another's file offset counting for neither. Or the import
+directory names every DLL and holds no unexplained slot only when RVAs are taken as file
+offsets. When either holds, or the section table is wiped, every RVA is read as a file
+offset for the imports and the cookie.
+
+**The entry point where the file stores nothing.** The loader fills a section past its
+stored bytes with zeros, so a program whose entry point lies there cannot start from the
+file. A tool that writes out the sections it could read, and trims the ones it found
+empty, leaves exactly that under a section table it rewrote to match. The tell needs the
+table to fit the file (every row read, no stored byte past the file's end): a file cut
+short lists bytes it no longer has and says nothing, and 92 examined files are cut short
+of their entry point. It also needs `SectionAlignment` of a page or more, because below
+that the loader maps the file in one piece, and neither a TLS directory nor a managed-code
+header in stored bytes, because a TLS callback or the runtime starts such a program
+without the entry point. Three of the eight files are memory images by another tell, two
+of them by resolved imports; no file with the tell shows evidence of a file as built.
+
+**The cookie** is reached through the load configuration. A 64-bit file without a readable
+one is searched in its writable sections for an 8-byte value beside its complement, with
+the top 16 bits clear, other than the compiler's default, and with at least 12 bit flips
+in its low 47 bits: a random number, not a constant.
+
+**The presumption.** `exe-moved-unvouched` is a 32-bit EXE whose header asks the loader to
+choose its address (`DYNAMIC_BASE` and a relocation table) at a base that is neither
+`0x400000` nor a multiple of 16 MiB, with no certificate in the file and no valid
+checksum. A linker can be told to use another base, so this is not a trace. But 897 of the
+937 files that show it also show a trace, and the tells that compare files confirm 7 of
+the other 40, so the remaining 33 are presumed loaded: a screen that must keep memory
+images out takes them, and loses a few files as built with them. A round base is one
+somebody gave the linker: of the 19 examined files that ask for a load address at
+`0x1000000`, `0x30000000`, `0x2E000000` or `0x1D000000`, 14 are files as built, system
+programs among them, and the 5 that are not show a trace. A valid checksum keeps one more
+examined file out of the presumption, at `0x4AD00000`.
+
+**The tells that compare files.** A *build* is the files that share machine, link time
+stamp, entry point, `SizeOfImage`, `SizeOfCode` and every section's name, RVA, virtual size
+and flags. `same-build-other-base`: a build present at two or more image bases other than
+the linkers' four defaults (`0x400000`, `0x10000000`, `0x140000000`, `0x180000000`) was
+relocated at load, and every copy off a default base is a memory image.
+`same-binding-other-addresses`: copies of a build whose bound import tables carry the same
+DLL time stamps and different addresses had those addresses written at load, since a binder
+gives one DLL one set. Both pass over a file that a certificate or a valid checksum vouches
+for; no examined file is kept by that. They are applied to all examined files together, so
+they find more as more files are read, and a verdict that rests on one of them alone (4
+files) is not a property of the file by itself.
+
+**Evidence of a file as built** is reported and never set against a tell:
+`imports-unresolved` (every slot untouched), `cookie-default`, `overlay` (a byte other
+than zero after the last section: zeros there are padding), `certificate-in-file` (the
+security directory points at a certificate entry inside the file),
+`signature-digest-matches` (a digest that entry names is the Authenticode hash of the
+file's own bytes) and `checksum-valid`.
+The first two say nothing for a 32-bit EXE at a base the presumption looks at. None outweighs
+a tell: a capture can carry each of them but a matching digest, and no examined file shows
+a matching digest beside a tell. Of the 17,309 memory images 7,224 still
+show untouched imports and 6,874 a default cookie: the image was captured as it was
+mapped, before the loader and the C runtime ran. 304 carry an overlay. 96 carry a valid
+checksum, because dump tools recompute it: all 96 store their sections at their RVAs, and
+every one of the 94 examined files in mapped layout with a valid checksum and nothing
+after its sections is a dump, so a checksum does not clear the layout tell. No memory
+image carries a certificate inside the file; 1,322 other files do.
+
+**A certificate is not a signature over the file.** The Authenticode hash covers the file
+without its checksum, its security directory entry and its certificate table. Verifiers
+take it end to end or section by section, and the reader accepts either. Of the 1,322
+files with a certificate table, 709 carry a digest that is the file's hash and 613 carry
+one that is not: the table came from another program, or the bytes changed after signing.
+LIEF's verifier gives the same answer on 1,318 of the 1,322 and reports a bad digest on all
+613; on the other four the hash of the bytes end to end is a digest the table names. No
+file with a matching digest shows a tell or is stored at its RVAs.
+
+**The reviewed list** (`--reviewed`, a tab-separated `sha256` and `note`) holds files a
+person examined and found to be memory images where no rule says so. A listed file is out
+with the tell `reviewed`. The list lives with the run's data, because it names samples, and
+the draw's manifest records its row count and content hash. Run `forced-c` lists nine:
+
+- code relocated to an allocation address, with a table of system addresses the program
+  resolved while running;
+- a packer header over pages of other mapped modules;
+- two files of one build with heap list pointers over the DOS header and heap addresses in
+  the directory entries, and a third file with the same damage and heap data where its
+  entry point is;
+- a data section that holds one system-library address 71 times and about 75 heap
+  pointers;
+- two files of one build with heap memory where the last three sections should be;
+- a managed program out of its packer: the packer's two sections hold no bytes, and the
+  certificate entry points 70 KiB past the end of the file.
+
+**Measured and not made rules**, because each takes files as built with the dumps, or has
+no general form:
+
+- zeros stored at the entry point: 84 examined files, 64 of them with no tell and 39 of
+  those with evidence of a file as built;
+- zero-filled gaps at the RVAs;
+- runs of system-library addresses anywhere in a 32-bit file, or in its writable sections,
+  with no bound table to say where the library is;
+- three distinct 64-bit values in a row in the range the loader hands out: a protected
+  file as built spells them in its instructions' displacements;
+- heap pointers over the DOS header: seen on four files, too few for a rule, and those no
+  tell takes are on the reviewed list;
+- a 64-bit DLL base where Windows 7 loads DLLs (`0x7FE...`), which Microsoft's own DLLs are
+  linked near and no examined file sits at;
+- a checksum that does not match, and a debug-directory pointer that does not match;
+- a certificate or a valid checksum set against the two base tells, which changes no
+  examined file either way.
+- whether the loader would start the file: sections it can map one after another, an entry
+  point in stored, executable bytes that decode as plausible instructions up to the first
+  call or jump, relocation targets at the header's base, and import tables that name every
+  DLL and function. 14,167 of the 16,789 files the one-file label calls memory images pass
+  all four, 634 of their 909 builds, against 8,675 of the 8,831 files as built. A capture
+  is a program that was running, so its code, its relocations and its import names are
+  real and agree with its header. The check tells a broken file from a loadable one, not a
+  capture from a build. Decoding past the first call misreads a Visual Basic program, whose
+  entry point is two instructions followed by data, so no rule decodes instructions.
+
+**What the rule cannot see.**
+
+- A capture taken before the loader ran and written back into file layout at its link-time
+  base has every field a file as built has.
+- A managed assembly rebuilt from memory into file layout: its code needs no relocation
+  and it imports one function, so it carries no address. The one found is on the reviewed
+  list, known by what its packer left behind.
+- A 32-bit bound import table: below 2 GiB a binder's addresses and the loader's look
+  alike. Addresses in data, or copies that disagree, give some away.
+- A file made to be completed at load by another program would show `entry-not-stored`
+  without being a capture. None is known among the eight.
+- 575 examined files show no evidence either way, 524 of them drawn. Most are packed or
+  hold no import table a reader can follow. They stay.
+- Files read by hand and left in frame, because nothing in them was written at run time:
+  five to which a tool added import sections, with no address in any slot and every
+  relocation target at the header's base; a protected driver whose certificate entry
+  points into a data section; and a driver whose discardable sections are zero under a
+  valid checksum.
+- An image stored at its RVAs with data after it is kept: 406 examined files with no tell,
+  304 of them drawn. A packer's stub can be built in that layout with its payload after
+  it, and a program can write its own image out that way to run again. Either is a file
+  presented to run. See [What one file can say](#what-one-file-can-say).
+
+### What one file can say
+
+`image_bytes.single_file` gives one file a label by itself, with what decided it:
+`memory-image`, `as-built` or `undecided`. It is what an analyzer that sees one file at a
+time can apply (DN-8811).
+
+**The label follows how the file is presented, not where its bytes came from.** A file
+presented to be executed or re-executed is a file as built. That includes a capture a tool
+rebuilt to load and a program that writes its own image out to run again, since either is
+a way to make samples. A memory image is a capture left as captured. `undecided` is a
+correct answer for any file, so evidence that is right most of the time is not let decide.
+
+This is not the frame rule above. The frame rule asks where the bytes came from and takes
+every capture out, rebuilt or not. The tells that compare files are left out here.
+
+The tells are read as marks of three kinds:
+
+- **Left by a running process**: `imports-resolved`, `cookie-initialized`,
+  `module-addresses-in-data`, `relocations-other-base`, `content-memory-layout` and
+  `section-table-wiped`. Neither a build nor a rebuild has them.
+- **The form a capture is written in**: `imagebase-runtime` and `sections-memory-layout`.
+- **Rebuilt to load**: `dump-tool-section` and `imports-rebuilt`. A tool made the imports
+  loadable again, so the file is presented to run.
+
+The label is:
+
+- **`memory-image`**: a mark of the first or second kind, none of the third, and neither a
+  valid checksum nor a signature over the file's bytes. Nothing was done to the capture.
+- **`as-built`**: a sign, nothing a running process left, and no tell outside the three
+  kinds; and either no capture mark at all, or a rebuilt import table on a file the loader
+  could start. The signs are `imports-unresolved` and `cookie-default`, states that loading
+  destroys, `signature-digest-matches`, and `checksum-valid`.
+- **`undecided`**: every other file, and one not read as a PE.
+
+What does not decide: an overlay, and a certificate whose digest is not the file's.
+Unpacked content (`uninitialized-section-filled`) says the program ran its unpacker and
+nothing about how the file is presented. A capture with a valid checksum or a matching
+signature and no rebuilt import table is undecided: somebody finished the file, and nothing
+shows it was made to load. The presumption and the tells of no kind (`section-size-is-address`,
+`entry-below-image`, `entry-not-stored`, `imagebase-windows7-aslr`) keep a sign from
+deciding.
+
+**A rebuilt capture is as built only when nothing read keeps the loader from starting
+it**: every import slot names what it imports (`imports-unresolved`), the file holds every
+byte its section table lists, the entry point lies in bytes the file stores (the two entry
+tells), and no other base holds a quarter as many relocation targets as the header's base
+does. A rebuilt capture that fails one of these is undecided. All 292 rebuilt captures
+labelled as built pass; the check is there for the files to come.
+
+On the 27,293 examined files:
+
+| Label | Files | Share | What they are |
+|---|---|---|---|
+| `memory-image` | 16,789 | 61.5% | captures left as captured |
+| `as-built` | 8,831 | 32.4% | 8,142 with a sign and no mark, 397 stored at their RVAs with data after the image, 292 captures rebuilt to load |
+| `undecided` | 1,673 | 6.1% | below |
+
+The undecided are 831 files whose only evidence is an overlay, 585 with no evidence, 96
+captures with a recomputed checksum, 51 with the presumption or a tell of no kind, 47
+rebuilt captures that keep state a process left or show no sign, 28 not read as a PE, 21
+with unpacked content and no other mark, 9 stored at their RVAs with data after the image
+and no sign, and 5 with an overlay and a certificate whose digest is not the file's.
+`forced-c`'s 9,500 files are 8,185 as built and 1,315 undecided: 757 with an overlay
+alone, 524 with no evidence, 28 not read as a PE and 6 others.
+
+**Checked against every other reading of these files**: the frame rule with its cross-file
+tells, two independent reviews and the reviewed list. Those readings ask where the bytes
+came from, so they differ from this label by design on the 292 rebuilt captures, 14 of
+which the second review named. No file labelled a memory image is called anything else by
+any of them. Two of the files labelled as built are on the reviewed list with nothing
+rebuilt: process memory inside a file whose imports and cookie nothing touched. Those are
+the 2 known wrong labels among 25,620, and no ground truth stands behind the readings.
+
+**An image stored at its RVAs with data after it is a file as built when it shows a
+sign**: 397 examined files, 303 of them drawn. No dump tool writes data after the image.
+292 of the drawn files are copies of one worm: a UPX stub stored as mapped, its first
+section all zeros, followed by 0.4 to 1.7 MB of data. A sample of the index shows the same
+stub in file layout from 2023-11 and in mapped layout only from 2025-11, in growing
+numbers. In other programs of the class the appended data is a list of executable paths
+under several user names, a dated run log, or filler that grows from copy to copy. That
+is a program writing its own image out to run again.
+
+**A capture rebuilt to load is a file as built**: 292 examined files, none drawn, because
+the frame rule takes them. 161 carry the CAPE sandbox's section, 120 an added section named
+`.imports`, 8 one named `.pb`, and one each `.ap0x`, `.mackt` and a table rebuilt in
+`.rsrc`; 282 hold unpacked content. The label says the file is in a form made to load and
+that nothing read keeps the loader from starting it. It does not say the file runs: nothing
+here is executed. The analyzer port (DN-8811) mirrors `single_file` at `RULES_VERSION` 13.
+Whether a rebuilt capture that a sandbox wrote should count as one a person made is open in
+[99](./99-open-questions.md).
+
+### What the index fields say
+
+`static` is a survey and the draw does not read it. It reads nine index fields for every
+frame file (`artifact.{sha256, size}`, `pefile.sections.{raw_size, virtual_size,
+virtual_address}`, `pefile.is_dll`, `lief.entrypoint`, `exiftool.{entrypoint, petype}`), 50
+files a query through `/v3/search/metadata/query`, and `memory_image.classify` gives each
+file the first reason that applies. Run `forced-b` was drawn under that rule. Read against
+the bytes of the 23,994 files of the first two slices examined since, it is wrong in both
+directions:
+
+| Index reason | The test | Files | Memory images by bytes | As built | No evidence |
+|---|---|---|---|---|---|
+| `memory_layout` | every section that has bytes has `raw_size == virtual_size`, and either a raw size is off the 512-byte grid or the file ends exactly where the image does | 11,870 | 11,484 | 333 | 53 |
+| `relocated_exe_32` | a `PE32` EXE whose base is neither `0x400000` nor `0x10000000` | 864 | 713 | 133 | 18 |
+| `runtime_base_64` | image base at or above `0x7FF000000000`; the base is `lief.entrypoint − exiftool.entrypoint` | 100 | 100 | 0 | 0 |
+| none: the file stays | | 11,160 | 2,856 | 7,837 | 445 |
+
+(22 of the files that stay are not read as a PE.) The index rule removed 537 files that are
+not memory images by their bytes, and passed 2,856 that are, a quarter of the files it
+passed that were then read: a capture saved back into file layout, an import table resolved
+under a link-time base, a program's data holding the addresses of a library, or an
+unpacked program in a packer's empty section shows in no field the index stores. Of
+`forced-b`'s 9,002 drawn files 1,385 are memory images by their bytes, 15.4%.
+
+### The walk, and a top-up slice
+
+**Only the files the draw needs are read.** Each band has a fixed order, keyed by
+`(sha256, seed)`. `screened_draw` reads it from the top: a memory image is passed over and
+a file that stays is drawn, until the band's target is met or the band ends. `bytes` asks
+the draw which unexamined files it would need if every one of them stayed, reads those,
+and asks again until nothing is needed. `pi_draw` is the share of the band the walk read,
+`n_examined / n_band`: every file in that stretch was examined, so each drawn file stands
+for the same number of files of its band. It is recorded as `n_draw / n_available`, with
+`n_available = n_draw × n_band / n_examined`, which is the band's in-frame population when
+the band is read to its end and an estimate of it otherwise; the manifest keeps
+`n_examined` and `n_out` per band, from which the error of that estimate follows.
+
+**A top-up slice is a later phase of the walk.** When the slices of a run cannot fill a
+band, `--top-up-slice` adds a slice whose files come after every file of the first slices
+in each band's order. Which slice a file is in follows from its sha256 prefix alone, so
+reading the slices in turn is still a random order with respect to what a file is, and no
+file already drawn moves. `pi_base` is the sum over all slices and `pi_draw` stays the share
+of the whole band that was read. For a band whose walk reads the first two slices and a
+share `f` of the third, a file of the band is in the first two with probability 2/256 and
+is read, or in the third with probability 1/256 and is read with probability `f`:
+`(2 + f)/256`, which is what `pi_draw × 3/256` records when the slices hold equal shares of
+the band. `draw --continues` accepts an earlier run whose slices are read first and in its
+order, with more allowed after them.
+
+### Runs
+
+Run `forced-b` was drawn under the index rule and run `forced-c` tops it up under the byte
+rule. The figures of `forced-b` below stand as the record of that run: its cohort still
+held the 1,385 memory images the bytes show.
+
+**Run `forced-b`, 2026-11-18: `forced-a` topped up under the index rule.** `static` read the
 94,232 frame files and every hash had a document. `draw --continues forced-a` left 12,837
 memory images out and drew 9,002 files from the 81,395 that stay: contested 4,143 of a
 4,500 quota, leaning malicious 1,371 of 1,500 and leaning clean 1,488 of 1,500, each band
@@ -455,6 +808,114 @@ count 0.642, (b) 0.747, (c) 0.823, gaps +0.105 and +0.181. Bootstrap by program:
 +0.157, 95% interval +0.088 to +0.191; (c) +0.194, +0.161 to +0.230. **The lead does not
 come from copies split across folds.** The temporal split still groups by 0011's stand-in
 key and leaves 41% of the contested validate rows with a twin program in train.
+
+**Run `forced-c`, 2026-11-19 and 2026-11-20: `forced-b` topped up under the byte rule.**
+`bytes` examined 27,293 frame files: `forced-b`'s 9,002, the 12,834 the index rule had
+left out, and 5,457 the walk fetched. 17,309 are memory images, 9,381 files as built, 575
+show no evidence and 28 are not read as a PE. `draw --continues forced-b` filled every band
+from three slices:
+
+| Band | In band | Examined | Memory images | Target | Drawn | `pi_draw` |
+|---|---|---|---|---|---|---|
+| contested | 17,634 | 14,146 | 9,646 | 4,500 | 4,500 | 0.8021 |
+| leaning malicious | 3,395 | 2,742 | 1,242 | 1,500 | 1,500 | 0.8078 |
+| leaning clean | 6,903 | 5,040 | 3,540 | 1,500 | 1,500 | 0.7303 |
+| consensus malicious | 109,521 | 3,162 | 2,162 | 1,000 | 1,000 | 0.0289 |
+| consensus clean | 3,176 | 1,073 | 73 | 1,000 | 1,000 | 0.3378 |
+
+Memory images are 68% of the contested files the walk read, 45% of leaning malicious, 70%
+of leaning clean, 68% of consensus malicious and 7% of consensus clean: about two thirds
+of the frame. Of `forced-b`'s 9,002 files 7,617 are drawn again, each in its band, with its
+rescan record and renders carried over, and 1,385 are out as memory images. The cohort is
+8,948 files as built, 524 with no evidence either way and 28 not read as a PE.
+
+The rule was corrected while the run was open, and each correction was a new rules
+version, a re-read of the files on disk and a re-draw that kept every file still in frame.
+`forced-b`'s cohort held 763 memory images under rules version 5, 1,362 under version 7,
+1,379 under version 8 and 1,385 under version 9. Versions 6 and 7 followed a first
+independent review of the kept files. Version 6 added the addresses of a bound module in
+a program's data: 1,905 of the 2,726 memory images examined in the consensus-malicious
+band show it, most of them copies of one Visual Basic 6 program. A second
+independent review judged the 27,049 files examined under version 6 from their bytes,
+re-read its proposals with version 7's reader, and proposed 35 more files and
+the release of 10. All 10 are released. Of the 35, 31 are out by a rule of
+version 8 (relocation targets, rebuilt import tables, resolved tables that other tables
+outvoted or a lost directory hid, the section UPX unpacks into) and 3 by name; the last is
+not in the cohort. Version 9 added the entry point the file does not store, after a
+reading of the files that review had left open. That review's table holds 9,428 of the
+cohort's 9,500 files. The other 72 were read by hand afterwards, and that reading found
+the 304 cohort files stored at their RVAs with data after the image
+([What one file can say](#what-one-file-can-say)). The frame rule keeps them. Versions 11
+to 13 changed the one-file label only, so the draw stands as version 9 made it.
+
+**1,949 rescans**, at one a second, in five batches (UTC): 139 on 2026-11-19 from 23:58,
+then on 2026-11-20 1,122 from 01:06 to 01:30, 342 from 18:07 to 18:13, 309 from 18:37 to
+18:42 and 37 from 23:36 to 23:37. 13 requests failed on the network and were accepted on a
+later pass; the third batch stopped on ten such failures in a row, and one rescan the API
+had started before its answer was lost was adopted from the file's scan history. 1,883 of
+the rescans are the cohort's new files, one each. The other 66 went to files that a later
+rules version took out. Every one of the 9,500 files has one accepted rescan.
+
+**Stages 02 to 08 on `forced-c`, 2026-11-23.** 9,447 of the 9,500 rows are trainable under
+0016. The label counts by band are left out of this section while the gold slice is under
+blind adjudication; they are in `data/runs/forced-c/labels.report.txt`. The temporal split
+holds train 5,668 and validate 1,417, with 2,362 rows in the gap and no test fold, as
+before. Baseline 3 within band on train + validate: clean 0.597, contested 0.656, leaning
+malicious 0.523, consensus malicious 0.957, every gated band in §8's proceed range. The
+coverage probe holds no band out (clean 0.642, contested 0.691, leaning malicious 0.615).
+The models on validate, per band (clean / contested / leaning malicious): (a) 0.519 /
+0.760 / 0.826, (b) 0.589 / 0.774 / 0.842, (c) 0.622 / 0.880 / 0.825, (b_verdicts) 0.551 /
+0.767 / 0.840, (b_random) 0.568 / 0.833 / 0.882, against the count's 0.560 / 0.639 / 0.494
+on the same rows.
+
+**The noise band on `forced-c`** (5 repeats × 5 family-grouped folds over the 9,447
+trainable rows in 3,353 groups; (b) at C = 0.01, (c) at 15 leaves × 300 trees). Contested:
+count 0.680, (b) 0.839 (0.837..0.842), (c) 0.868 (0.864..0.872); gap over the count +0.159
+for (b), worst repeat +0.157, and +0.189 for (c), worst +0.184: **both clear**. Leaning
+malicious: count 0.533, (b) 0.887, (c) 0.879: both clear. Clean: count 0.583, (b) 0.635 and
+(c) 0.771: both clear, (b) by +0.052 with a worst repeat of +0.032. Consensus malicious:
+0.953 / 0.974 / 0.974, reported. Against `forced-b`, whose cohort held 1,385 memory images,
+the contested band stands where it was (0.684 / 0.833 / 0.862 there).
+
+**With the copies of a program held together** (outside the pipeline:
+`~/dn-7927-pilot-scratch/forced_c_compare.py`, the method of `forced-b`'s comparison). The
+9,447 trainable rows are 4,818 programs, 4,335 of them single files, and the ten largest
+hold 2,731 rows. Folds grouped by program, contested: (b) 0.841 and (c) 0.875, gaps +0.161
+and +0.195. One row per program, 1,786 contested rows: count 0.651, (b) 0.756, (c) 0.809,
+gaps +0.105 and +0.158. Bootstrap by program: (b) +0.162, 95% interval +0.096 to +0.202;
+(c) +0.200, +0.166 to +0.241. In the clean band (b) loses its lead once folds are grouped
+by program (0.566 against 0.583) and (c) keeps it (0.731). The temporal split leaves 42% of
+the contested validate rows with a twin program in train.
+
+**Without the files the one-file label leaves undecided** (`forced_c_known_only.py`): 8,133
+trainable rows, 3,811 of them contested. Count 0.705, (b) 0.852, (c) 0.893, gaps +0.148 and
++0.189; grouped by program (b) 0.858 and (c) 0.894. The lead does not rest on the undecided
+files, and the pilot trains on the cohort as drawn (Kyle, 2026-11-23).
+
+**Against the incumbent PolyScore at T** (`forced_c_incumbent.py`,
+`forced_c_incumbent_boot.py`), contested band: 0.785 on the trainable rows, where the count
+reads 0.680; 0.756 on the temporal validate rows, 0.724 with one row per program and 0.811
+without the undecided files. Bootstrap by program of each model's gap over it, on
+out-of-fold scores with folds grouped by program: (b) +0.057, 95% interval +0.015 to
++0.110; (c) +0.094, +0.067 to +0.159. Leaning malicious: incumbent 0.673, gaps +0.218 and
++0.222. Clean: incumbent 0.559; (b) +0.008 with an interval from −0.129 to +0.155, which is
+no lead, and (c) +0.189, +0.115 to +0.249. On the temporal validate rows (b) is 0.018 ahead
+of the incumbent in the contested band, and no noise band covers that gap: stage 07b
+measures the gap over the count only.
+
+**The gold slice of `forced-c`, 2026-11-23: `forced-a`'s slice topped up**
+(`03b_gold_draw.py --continues forced-a`, seed 20260922;
+[04 § Stage contracts](./04-pipeline.md#stage-contracts)). 140 of the 200 files of
+`forced-a`'s slice are memory images and out of frame. The other 60 stay, each in the group
+it was drawn in, and 140 files are drawn from the contested band of `forced-c`: 200 files,
+100 per group, no rescan. No file of the band changed group between the two draws, and the
+earlier sheet held no verdict to carry. By the one-file label 168 of the 200 are files as
+built and 32 are undecided. The slice is 105 programs: 86 single files, 38 and 23 copies of
+the band's two most-copied programs (627 and 472 of the 4,711 cohort files in the contested
+band at T), and no other program more than five times. The adjudicator reads
+`data/gold/forced-c/review.csv`, and `new_hashes.txt` beside it lists the 140. How many
+files each group carried and drew is in the manifest and stays out of this section while
+the slice is under adjudication.
 
 ## The injection arm (`pipeline/00c_inject_known_good.py`)
 

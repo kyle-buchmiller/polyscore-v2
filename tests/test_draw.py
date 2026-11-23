@@ -6,7 +6,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from polyscore_v2.draw import DRAWN_STRATA, assign_stratum, check_draw, stratified_draw
+from polyscore_v2.draw import (
+    DRAWN_STRATA,
+    assign_stratum,
+    check_draw,
+    screened_draw,
+    stratified_draw,
+)
 
 
 def _base(n: int, seed: int = 0) -> pd.DataFrame:
@@ -123,3 +129,86 @@ def test_consensus_is_half_not_unanimity():
                        "leaning_malicious", "leaning_clean", "below_floor"]
     # the config floor applies by default: a 1-of-2 scan never lands in a band
     assert list(assign_stratum(pd.Series([1]), pd.Series([2]))) == ["below_floor"]
+
+
+# --- the screened draw: a file must be examined before it can be shown to stay (specs/12)
+
+
+def test_a_screened_draw_with_nothing_out_is_the_plain_draw():
+    base = _base(5_000)
+    plain, _ = stratified_draw(base, cohort_size=500, seed=3, min_definite=5)
+    screened, reports, needed = screened_draw(
+        base, dict.fromkeys(base["sha256"]), cohort_size=500, seed=3, min_definite=5
+    )
+    assert needed == [] and check_draw(screened, reports) == []
+    pd.testing.assert_frame_equal(plain, screened)
+
+
+def test_a_file_that_is_out_is_passed_over_and_the_walk_goes_deeper():
+    base = _base(5_000)
+    plain, _ = stratified_draw(base, cohort_size=500, seed=3, min_definite=5)
+    band = plain[plain["stratum"] == "consensus_clean"]
+    gone = set(band["sha256"].head(7))
+    examined = {s: ("memory_image" if s in gone else None) for s in base["sha256"]}
+    cohort, reports, needed = screened_draw(base, examined, cohort_size=500, seed=3, min_definite=5)
+    now = cohort[cohort["stratum"] == "consensus_clean"]
+    assert needed == [] and not gone & set(cohort["sha256"])
+    # The target is still met, and every file the plain draw took that stays is drawn again.
+    assert len(now) == len(band) and set(band["sha256"]) - gone <= set(now["sha256"])
+    r = next(r for r in reports if r.stratum == "consensus_clean")
+    assert (r.n_out, r.n_examined) == (7, r.n_draw + 7)
+    assert r.pi == pytest.approx(r.n_examined / r.n_band, rel=1e-3)
+    assert (now["pi"] == r.n_draw / r.n_available).all()
+
+
+def test_a_band_read_to_its_end_counts_what_stays():
+    base = _base(300)
+    gone = set(base["sha256"].iloc[::10])
+    examined = {s: ("memory_image" if s in gone else None) for s in base["sha256"]}
+    cohort, reports, needed = screened_draw(base, examined, cohort_size=50_000, seed=3, min_definite=5)
+    assert needed == [] and not gone & set(cohort["sha256"])
+    for r in reports:
+        if r.stratum == "below_floor" or not r.n_band:
+            continue
+        assert r.n_examined == r.n_band and r.n_draw == r.n_available == r.n_band - r.n_out
+        assert r.underfilled and (r.pi == 1.0 or r.n_draw == 0)
+
+
+def test_the_walk_asks_for_the_next_file_in_order_and_no_more():
+    base = _base(5_000)
+    plain, _ = stratified_draw(base, cohort_size=500, seed=3, min_definite=5)
+    examined: dict[str, str | None] = dict.fromkeys(plain["sha256"])
+    assert screened_draw(base, examined, cohort_size=500, seed=3, min_definite=5)[2] == []
+    victim = plain[plain["stratum"] == "consensus_clean"]["sha256"].iloc[0]
+    examined[victim] = "memory_image"
+    _, _, needed = screened_draw(base, examined, cohort_size=500, seed=3, min_definite=5)
+    assert len(needed) == 1 and needed[0] not in examined
+    examined[needed[0]] = None
+    cohort, _, needed = screened_draw(base, examined, cohort_size=500, seed=3, min_definite=5)
+    assert needed == []
+    assert victim not in set(cohort["sha256"]) and len(cohort) == len(plain)
+
+
+def test_nothing_examined_means_the_whole_head_of_every_band_is_needed():
+    base = _base(5_000)
+    plain, _ = stratified_draw(base, cohort_size=500, seed=3, min_definite=5)
+    cohort, _, needed = screened_draw(base, {}, cohort_size=500, seed=3, min_definite=5)
+    assert cohort.empty and set(needed) == set(plain["sha256"])
+
+
+def test_a_later_phase_tops_a_band_up_without_moving_a_drawn_file():
+    base = _base(5_000)
+    stays = dict.fromkeys(base["sha256"])
+    whole, _, _ = screened_draw(base, stays, cohort_size=50_000, seed=3, min_definite=5)
+    # The same files as a first phase, and as many again added after them.
+    more = base.assign(sha256=base["sha256"].str[:-1] + "x")
+    both = pd.concat([base.assign(phase=0), more.assign(phase=1)], ignore_index=True)
+    examined = dict.fromkeys(both["sha256"])
+    cohort, reports, needed = screened_draw(both, examined, cohort_size=50_000, seed=3, min_definite=5)
+    assert needed == [] and set(whole["sha256"]) <= set(cohort["sha256"])
+    # A band the first phase fills is never read into the second.
+    small, reports, _ = screened_draw(both, examined, cohort_size=100, seed=3, min_definite=5)
+    assert not small["sha256"].str.endswith("x").any()
+    for r in reports:
+        if r.n_draw:
+            assert r.pi == pytest.approx(r.n_examined / r.n_band, rel=0.02)

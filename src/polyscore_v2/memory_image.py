@@ -1,15 +1,14 @@
-"""Which files of a frame are memory images, read from what the metadata index stores.
+"""What the metadata index's own fields say about which frame files are memory images.
 
-A memory image is a program written out of a running process, not the file as built. They
-are not training material (decisions/0017); this module is the rule that finds them.
-see specs/12-api-slice-pilot.md § Memory images are out of frame
+A survey, not the frame rule: the index stores no import table, so it passes memory images
+saved in file layout and flags files that are merely built in an unusual way. The frame rule
+reads each file's bytes (`image_bytes`).
+see specs/12-api-slice-pilot.md § What the index fields say
 """
 
 from __future__ import annotations
 
-import hashlib
-from collections.abc import Iterable, Mapping
-from pathlib import Path
+from collections.abc import Mapping
 
 import pandas as pd
 
@@ -33,14 +32,12 @@ DEFAULT_BASES_32 = frozenset({0x400000, 0x10000000})
 REASON_LAYOUT = "memory_layout"
 REASON_RUNTIME_BASE = "runtime_base_64"
 REASON_RELOCATED_EXE = "relocated_exe_32"
-REASON_CONFIRMED = "confirmed_from_bytes"
 REASON_NO_RECORD = "no_index_record"
 #: Report order; a file carries the first that applies.
 REASONS: tuple[str, ...] = (
     REASON_LAYOUT,
     REASON_RUNTIME_BASE,
     REASON_RELOCATED_EXE,
-    REASON_CONFIRMED,
     REASON_NO_RECORD,
 )
 
@@ -64,10 +61,10 @@ def trim(doc: Mapping) -> dict:
 
 
 def classify(doc: Mapping) -> dict:
-    """One index document -> its layout, its image base and the reason it is out of frame.
+    """One index document -> its layout, its image base and why it looks like a memory image.
 
-    `reason` is None for a file that stays. A file the analyzers could not lay out
-    (`no_sections`, `other`, no image base) stays: the rule acts on evidence, not on its absence.
+    `reason` is None for a file that does not. A file the analyzers could not lay out
+    (`no_sections`, `other`, no image base) gets none: the rule acts on evidence, not on its absence.
     """
     pe = doc.get("pefile") or {}
     lief = doc.get("lief") or {}
@@ -124,7 +121,7 @@ def classify(doc: Mapping) -> dict:
 
 
 def absent(sha256: str) -> dict:
-    """The row of a file the index returned no document for: it cannot be shown to stay."""
+    """The row of a file the index returned no document for."""
     return {
         "sha256": sha256,
         "size": 0,
@@ -144,27 +141,3 @@ def to_frame(rows: list[dict]) -> pd.DataFrame:
     df["image_base"] = pd.array([r["image_base"] for r in rows], dtype="Int64")
     df["reason"] = pd.Series([r["reason"] for r in rows], dtype="object", index=df.index)
     return df
-
-
-def read_confirmed(path: Path) -> tuple[list[str], str]:
-    """Hashes a byte-level check found to be memory images, one per line, and the list's sha256."""
-    text = path.read_text()
-    hashes = [ln.split("#", 1)[0].strip().lower() for ln in text.splitlines()]
-    return [h for h in hashes if h], hashlib.sha256(text.encode()).hexdigest()
-
-
-def frame_reasons(sha256: pd.Series, static: pd.DataFrame, confirmed: Iterable[str] = ()) -> pd.Series:
-    """Per file of a frame: why it is out as a memory image, or None when it stays.
-
-    `static` is one `classify` row per file and must cover the frame. `confirmed` adds the
-    files only their bytes give away; the index's own reason wins where both apply.
-    """
-    by_hash = static.drop_duplicates("sha256").set_index("sha256")["reason"]
-    unknown = ~sha256.isin(by_hash.index)
-    if unknown.any():
-        raise ValueError(f"{int(unknown.sum())} frame files have no static record: run the static phase")
-    reason = sha256.map(by_hash).astype("object")
-    reason = reason.where(reason.notna(), None)
-    listed = sha256.isin(set(confirmed))
-    reason[listed & reason.isna()] = REASON_CONFIRMED
-    return reason

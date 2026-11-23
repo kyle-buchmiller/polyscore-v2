@@ -45,3 +45,4 @@ than one that records being right.
 | [0015](./0015-injection-arm-from-the-index-authenticode-and-virustotal.md) | The injection arm is drawn from the index by Authenticode and admitted on VirusTotal's signature check too | Accepted |
 | [0016](./0016-convergence-label-and-within-band-gate.md) | The answer column reads movement between the scans, and the gate is scored within band (supersedes 0011's label rule) | Accepted |
 | [0017](./0017-memory-images-are-not-training-material.md) | Memory images are not training material; on-disk variants of one program stay | Accepted |
+| [0018](./0018-memory-images-are-told-from-the-bytes.md) | Memory images are told from the file's bytes, with a presumption, a reviewed list and a third slice (amends 0017) | Proposed |

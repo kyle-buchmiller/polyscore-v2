@@ -1,5 +1,5 @@
 .PHONY: help setup lock lint test clean \
-        slice force-static force-draw force-submit force-collect inject-draw inject-confirm inject-collect \
+        slice force-static force-bytes force-draw force-submit force-collect inject-draw inject-confirm inject-collect \
         pe-gate survey base extract compose compose-run draw label gold-draw features split baselines train noise-band calibrate evaluate \
         all rehearsal
 
@@ -29,7 +29,8 @@ EXTRACT_FLAGS   ?= --chunk-days 1 --timeout 1800s
 BASELINES_FLAGS ?=
 # NOISE_FLAGS=--repeats N --folds K for the noise band; the default is settings.stability_runs x 5
 NOISE_FLAGS     ?=
-# GOLD_FLAGS=--per-group N --band <band> for the gold draw; the default is 100 per group from the contested band
+# GOLD_FLAGS=--per-group N --band <band> for the gold draw; the default is 100 per group from the contested band.
+# GOLD_FLAGS=--continues <run> tops that run's gold slice up under POLYSCORE_RUN_ID instead of drawing anew
 GOLD_FLAGS      ?=
 # CALIBRATE_FLAGS=--provisional until grade-3 labels exist
 CALIBRATE_FLAGS ?= --provisional
@@ -43,6 +44,14 @@ SLICE_FLAGS     ?=
 # the forced-rescan run (step 0b): the slices to draw from, and the phase flags
 SLICES          ?= data/api_slice/2026-09-08_2026-10-08_a1.parquet data/api_slice/2026-09-08_2026-10-08_a0.parquet
 FORCE_FLAGS     ?=
+# further slices of the same window, read only after SLICES: they top up the bands SLICES cannot fill
+TOP_UP_SLICES   ?=
+# a tab-separated list (sha256, note) of files a person found to be memory images where no rule says so
+REVIEWED        ?=
+FRAME            = $(foreach s,$(SLICES),--slice $(s)) $(foreach s,$(TOP_UP_SLICES),--top-up-slice $(s)) \
+                   $(if $(REVIEWED),--reviewed $(REVIEWED),) --max-age-days $(HORIZON_MAX)
+# where sample files are kept, named by sha256, outside the repo; fetched files go to the first
+SAMPLES         ?=
 # the injection arm (step 0c): the sha256 prefixes of the candidate slice, and the phase flags
 INJECT_PREFIX   ?= a
 INJECT_FLAGS    ?=
@@ -76,11 +85,14 @@ slice:  ## step 0 (API): a sha256-prefix slice of the public metadata index and 
 	$(PY) pipeline/00_api_slice.py --start $(WINDOW_START) --end $(WINDOW_END) $(if $(PREFIX),--prefix $(PREFIX),) \
 	    --horizon-max-days $(HORIZON_MAX) $(SLICE_FLAGS) $(OVERWRITE)
 
-force-static:  ## step 0b.1: read the frame's layout fields from the index and mark the memory images (needs POLYSCORE_API_KEY from here on)
-	$(PY) pipeline/00b_force_rescan.py $(OVERWRITE) static $(foreach s,$(SLICES),--slice $(s)) --max-age-days $(HORIZON_MAX) $(FORCE_FLAGS)
+force-static:  ## step 0b survey, not needed by the draw: what the index's layout fields say of the frame (needs POLYSCORE_API_KEY)
+	$(PY) pipeline/00b_force_rescan.py $(OVERWRITE) static $(FRAME) $(FORCE_FLAGS)
 
-force-draw:  ## step 0b.2: band the slices at T, leave the memory images out and draw the cohort to rescan (FORCE_FLAGS=--continues <run> to top an earlier run up)
-	$(PY) pipeline/00b_force_rescan.py $(OVERWRITE) draw $(foreach s,$(SLICES),--slice $(s)) --max-age-days $(HORIZON_MAX) $(FORCE_FLAGS)
+force-bytes:  ## step 0b.1: read the bytes of the files the draw needs, SAMPLES=<dir outside the repo> (needs POLYSCORE_API_KEY from here on)
+	$(PY) pipeline/00b_force_rescan.py bytes $(FRAME) $(foreach d,$(SAMPLES),--samples $(d)) $(FORCE_FLAGS)
+
+force-draw:  ## step 0b.2: band the slices at T and draw the cohort past the memory images (FORCE_FLAGS=--continues <run> to top an earlier run up)
+	$(PY) pipeline/00b_force_rescan.py $(OVERWRITE) draw $(FRAME) $(FORCE_FLAGS)
 
 force-submit:  ## step 0b.3: POST the rescans, resumably (FORCE_FLAGS=--limit 20 for a canary)
 	$(PY) pipeline/00b_force_rescan.py submit $(FORCE_FLAGS)
@@ -128,7 +140,7 @@ draw:  ## step 5 (01b): the run draw -- stratified, seeded, pi recorded; never t
 label:  ## step 6: attach the answer column
 	$(PY) pipeline/03_label.py $(OVERWRITE)
 
-gold-draw:  ## step 6b: the 200-file gold slice to adjudicate, drawn at random from the contested band (GOLD_FLAGS=--per-group N)
+gold-draw:  ## step 6b: the 200-file gold slice to adjudicate, drawn at random from the contested band (GOLD_FLAGS=--per-group N, --continues <run>)
 	$(PY) pipeline/03b_gold_draw.py $(OVERWRITE) $(GOLD_FLAGS)
 
 features:  ## step 7: build the feature matrix (and the control sample's)

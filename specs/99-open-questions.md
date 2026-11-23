@@ -200,19 +200,42 @@ only access.
   a customer can submit one. The choices: score it like any other file, withhold the score,
   or give it a rule of its own. Each needs the image told from a file as built at analysis
   time, which is DN-8811's tag.
-- **The gold slice after the memory-image rule.** 139 of the 200 files of `forced-a`'s gold
-  slice are memory images by their bytes and are out of the training population; 61 remain
-  (45 confirmed as built, 16 with no verdict either way). Open: whether the slice is topped
-  up from the on-disk contested rows, which needs no rescan, and whether the memory-image
-  clusters are adjudicated to the end (two builds decide 123 of the 139 files).
-- **The memory-image rule is a floor.** A dump saved back into file layout at a default
-  image base looks like a file as built in every field the index stores: 3 of the 64
-  gold-slice files that pass the rule are such dumps, so about one kept contested row in
-  twenty may be another ([12 § Memory images are out of frame](./12-api-slice-pilot.md)).
-  A byte-level pass with DN-8811's prototype over the 32-bit files of `forced-b` (4,770
-  files, 13.4 GB to download) would close it. A top-up after it is cheapest before
-  2026-12-07, when the window's first files turn 90 days old and start leaving the frame.
-  Not decided.
+- **The gold slice after the memory-image rule.** 140 of the 200 files of `forced-a`'s gold
+  slice are memory images by their bytes and are out of the training population; 60 remain.
+  Answered 2026-11-23 (Kyle): the slice is topped up from `forced-c`'s contested band, the
+  60 kept and 140 drawn with no rescan ([12 § Runs](./12-api-slice-pilot.md#runs)), and the
+  memory images are not adjudicated. Open: how copies are judged. The 200 files are 105
+  programs and two programs hold 61 of them. Proposed: one verdict per program, each copy
+  checked against it byte for byte.
+- **What the byte rule cannot see.** A capture taken before the loader ran and written back
+  into file layout at its link-time base has every field a file as built has, and so has a
+  managed assembly rebuilt into file layout. 524 of `forced-c`'s 9,500 files show no
+  evidence either way, 238 of them in the contested band: packed files, and files with no
+  import table a reader can follow ([12 § Bytes decide](./12-api-slice-pilot.md)). Two
+  independent reviews each found memory images the rules of the day had missed, so a third
+  may too. Narrowing it further needs a signal outside the file's structure: the sandbox's
+  own record of which artifacts it dumped, or DN-8811's tag once the upstream submitter is
+  known. A re-draw after such a change is cheapest before 2026-12-07, when the window's
+  first files turn 90 days old and start leaving the frame.
+- **Undecided files in the training population.** The frame rule takes out what it calls a
+  memory image and keeps the rest. By the one-file label 1,315 of `forced-c`'s 9,500 files
+  are undecided, most of them with an overlay alone or no evidence
+  ([12 § What one file can say](./12-api-slice-pilot.md#what-one-file-can-say)). Measured
+  2026-11-23: without them the contested band reads count 0.705, (b) 0.852 and (c) 0.893,
+  the same lead ([12 § Runs](./12-api-slice-pilot.md#runs)), and the pilot trains on the
+  cohort as drawn (Kyle, 2026-11-23). Open for the wider-window run: whether its draw
+  keeps them.
+- **Rebuilt captures and the frame.** A file presented to be executed or re-executed is a
+  file as built, a rebuilt capture included (Kyle, 2026-11-21), and the one-file label
+  follows that. The frame rule still takes every capture out: 339 examined files show a
+  rebuilt import table and are out of frame, 292 of them as built by the one-file label.
+  Open: whether the next draw keeps them, and whether a rebuilt capture that a sandbox
+  wrote (161 of the 292 carry CAPE's section) counts like one a person made.
+- **The presumption and the reviewed list.** Decision
+  [0018](../decisions/0018-memory-images-are-told-from-the-bytes.md) is Proposed: it takes
+  a 32-bit EXE off its link-time base for a memory image without a trace (33 examined files
+  rest on that alone) and removes nine files by name on a person's reading. Both are Kyle's
+  to accept or strike.
 - **Inter-analyst agreement in the 0.3–0.7 band.** Never measured. It is the ceiling on
   calibration in the only region where a calibrated probability beats what exists today.
   A 200-file dual-adjudication pilot answers it cheaply and should precede any headcount

@@ -2,13 +2,18 @@
 """Stage 00b — forced rescans: draw the cohort at T from API slices, rescan it, collect labels.
 
 Natural rescans cannot label a 10k cohort from the public community (specs/12 § Measured),
-so the pilot forces them (decisions/0014). Four phases, each resumable:
+so the pilot forces them (decisions/0014). Five phases, each resumable:
 
-  static   read each frame file's layout fields from the index, one cached line per file, and
-           mark the memory images: they are not training material (decisions/0017).
-  draw     band every scanned-first file of the slices at T, leave the memory images out,
-           draw the cohort stratified per SS9 with the seed (pi_draw recorded beside the
-           slices' pi_base), write it. --continues RUN tops an earlier run up as a new one.
+  static   a survey, not a step: what the index's layout fields say of each frame file. The
+           draw does not read it; the index is wrong in both directions (specs/12).
+  bytes    read the bytes of every file the draw needs, from the sample directories or the
+           API, and record what they show: memory images are not training material
+           (decisions/0017) and only a file's bytes say whether it is one (decisions/0018).
+  draw     band every scanned-first file of the slices at T and read each band's fixed order
+           from the top, passing over the memory images, until the band's target is met
+           (pi_draw recorded beside the slices' pi_base). --continues RUN tops an earlier
+           run up as a new one, and --top-up-slice adds a slice that is read only after
+           the others, for the bands they could not fill.
   submit   POST one rescan per drawn file through /v3/consumer/submission/<community>/rescan
            in a seeded random order, so a partial run is a random subsample; one line per
            file in rescans.jsonl, so a killed run continues where it stopped.
@@ -18,8 +23,8 @@ so the pilot forces them (decisions/0014). Four phases, each resumable:
            reads: a base + its assertions (01a's shape) and the run cohort (01b's shape), so
            02 -> 09 run unchanged.
 
-Writes: data/forced/<run_id>/{static.jsonl, static.parquet, draw.parquet, rescans.jsonl,
-        renders.jsonl, collect.report.txt}
+Writes: data/forced/<run_id>/{static.jsonl, static.parquet, bytes.jsonl, screen.parquet,
+        draw.parquet, rescans.jsonl, renders.jsonl, collect.report.txt}
         data/base/forced_<run_id>.parquet (+ .assertions.parquet, manifest)
         data/runs/<run_id>/cohort.parquet (+ manifest)
 Contract: specs/12-api-slice-pilot.md § Forced rescans; specs/04-pipeline.md stage 00b.
@@ -33,13 +38,17 @@ import datetime as dt
 import hashlib
 import json
 import sys
+import threading
 import time
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from polyscore_v2 import image_bytes  # noqa: E402
 from polyscore_v2.api_source import ApiClient, hash_batches  # noqa: E402
 from polyscore_v2.config import (  # noqa: E402
     CONSENSUS_MALICIOUS,
@@ -49,7 +58,7 @@ from polyscore_v2.config import (  # noqa: E402
     STRATUM_TARGETS,
     settings,
 )
-from polyscore_v2.draw import assign_stratum, check_draw, stratified_draw  # noqa: E402
+from polyscore_v2.draw import assign_stratum, check_draw, screened_draw  # noqa: E402
 from polyscore_v2.io import read_snapshot, write_snapshot  # noqa: E402
 from polyscore_v2.logging_setup import configure  # noqa: E402
 from polyscore_v2.memory_image import (  # noqa: E402
@@ -57,8 +66,6 @@ from polyscore_v2.memory_image import (  # noqa: E402
     STATIC_INCLUDE,
     absent,
     classify,
-    frame_reasons,
-    read_confirmed,
     to_frame,
     trim,
 )
@@ -75,8 +82,11 @@ DEVIATIONS = [
     "bands at draw time used the index's detections.total; the base's n_definite is the render's"
     " count of non-null verdicts, which can differ by one or two",
     "files over the rescan route's size cap are out of frame: the public API refuses them under this key",
-    "memory images are out of frame, told by the index's layout fields: a dump saved in file layout"
-    " at a default base is not seen",
+    "memory images are out of frame, told by each file's own bytes: an image captured before the"
+    " loader ran and saved in file layout at its link-time base is not seen",
+    "a file whose bytes could not be read is out of frame: it cannot be shown to stay",
+    "a file on the reviewed list is out of frame: a person found it to be a memory image where no"
+    " rule says so",
 ]
 STOP_STATUSES = (401, 402, 403)
 
@@ -98,6 +108,7 @@ class Frame:
 
     files: pd.DataFrame
     slice_hashes: list[str]
+    top_up_hashes: list[str]
     window: tuple[str, str]
     pi_base: float
     slice_rows: int
@@ -107,7 +118,11 @@ class Frame:
 
 
 def _frame(a: argparse.Namespace) -> Frame:
-    slices = [read_snapshot(Path(p)) for p in a.slice]
+    # A top-up slice is a later phase of every band's walk. Which slice a file is in follows
+    # from its hash alone, so reading the slices in turn is still a random order.
+    slices = [read_snapshot(Path(p)) for p in [*a.slice, *a.top_up_slice]]
+    for k, (d, _) in enumerate(slices):
+        d["phase"] = max(0, k - len(a.slice) + 1)
     windows = {(m["window_start"], m["window_end"]) for _, m in slices}
     if len(windows) != 1:
         sys.exit(f"slices must share one window, got {sorted(windows)}")
@@ -143,11 +158,14 @@ def _frame(a: argparse.Namespace) -> Frame:
             "natural_rescan": (df.loc[keep, "latest_instance"] != df.loc[keep, "first_instance"])
             .fillna(False)
             .astype(bool),
+            "phase": df.loc[keep, "phase"].astype("int64"),
         }
     ).reset_index(drop=True)
+    hashes = [m["content_sha256"] for _, m in slices]
     return Frame(
         files=files,
-        slice_hashes=[m["content_sha256"] for _, m in slices],
+        slice_hashes=hashes[: len(a.slice)],
+        top_up_hashes=hashes[len(a.slice) :],
         window=next(iter(windows)),
         pi_base=pi_base,
         slice_rows=int(len(df)),
@@ -237,6 +255,157 @@ def cmd_static(a: argparse.Namespace, log) -> None:
     )
 
 
+# ----------------------------------------------------------------------------- bytes
+
+REASON_MEMORY_IMAGE = "memory_image"
+#: The mark of a file a person found to be a memory image where no rule says so.
+REVIEWED = "reviewed"
+#: A file whose bytes could not be had cannot be shown to stay, so it is out of frame too.
+REASON_NO_BYTES = "no_bytes"
+#: What reading a file can end in for good; any other status is tried again.
+SETTLED = ("ok", "not_found", "withheld", "too_large")
+#: Which reader wrote a cached line: facts read by another version of the rule are read again.
+READER = hashlib.sha256(Path(image_bytes.__file__).read_bytes()).hexdigest()
+
+
+def _read_bytes_cache(path: Path) -> dict[str, dict]:
+    """sha256 -> what reading the file gave, by this reader. The last line of a file wins."""
+    records: dict[str, dict] = {}
+    if path.exists():
+        with path.open() as fh:
+            for line in fh:
+                if line.strip():
+                    rec = json.loads(line)
+                    records[rec["sha256"]] = rec
+    return {h: r for h, r in records.items() if r["status"] in SETTLED and r.get("reader") == READER}
+
+
+def _read_reviewed(path: str | None) -> dict[str, str]:
+    """sha256 -> note, from a tab-separated list with those two columns; empty without a list."""
+    if not path:
+        return {}
+    listed = pd.read_csv(path, sep="\t", dtype=str).fillna("")
+    return dict(zip(listed["sha256"], listed["note"], strict=True))
+
+
+def _screen(records: dict[str, dict], reviewed: dict[str, str]) -> tuple[dict[str, str | None], pd.DataFrame]:
+    """Every examined file -> why it is out of frame, None when it stays; and the verdict table.
+
+    The verdicts are taken over all examined files at once, because some tells compare files.
+    A file on the reviewed list is a memory image whatever its bytes showed the reader.
+    """
+    rows = image_bytes.verdicts((h, r["facts"]) for h, r in sorted(records.items()) if r["status"] == "ok")
+    rows += [
+        {"sha256": h, "verdict": REASON_NO_BYTES, "tells": r["status"], "as_built": ""}
+        for h, r in sorted(records.items())
+        if r["status"] != "ok"
+    ]
+    by_sha = {r["sha256"]: r for r in rows}
+    for sha in sorted(reviewed):
+        row = by_sha.get(sha)
+        if row is None:
+            row = by_sha[sha] = {"sha256": sha, "verdict": "", "tells": "", "as_built": ""}
+            rows.append(row)
+        if row["verdict"] != image_bytes.MEMORY_IMAGE:
+            row.update(verdict=image_bytes.MEMORY_IMAGE, tells=REVIEWED)
+    table = pd.DataFrame(rows, columns=["sha256", "verdict", "tells", "as_built"])
+    out = {image_bytes.MEMORY_IMAGE: REASON_MEMORY_IMAGE, REASON_NO_BYTES: REASON_NO_BYTES}
+    return {r["sha256"]: out.get(r["verdict"]) for r in rows}, table
+
+
+def _examine(sha: str, dirs: list[Path], client: ApiClient | None, max_bytes: int) -> dict:
+    """One file's bytes, from the sample directories or else the API, and what they show."""
+    data = next(((d / sha).read_bytes() for d in dirs if (d / sha).is_file()), None)
+    status = "ok"
+    if data is not None:
+        if hashlib.sha256(data).hexdigest() != sha:
+            status = "wrong_content"
+    elif client is None:
+        status = "absent"
+    else:
+        status, data = client.download(sha, max_bytes=max_bytes)
+        if status == "ok":
+            # Kept so the rule can be read again without a download. A live sample: read-only, never run.
+            part = dirs[0] / f".part-{sha}"
+            part.write_bytes(data)
+            part.chmod(0o400)
+            part.replace(dirs[0] / sha)
+    facts = image_bytes.read(data) if status == "ok" else None
+    return {"sha256": sha, "status": status, "reader": READER, "facts": facts}
+
+
+def cmd_bytes(a: argparse.Namespace, log) -> None:
+    fr = _frame(a)
+    dirs = [Path(d) for d in a.samples]
+    for d in dirs:
+        if not d.is_dir():
+            sys.exit(f"{d} is not a directory")
+    cache = _out(a.run_id, "bytes.jsonl")
+    records = _read_bytes_cache(cache)
+    reviewed = _read_reviewed(a.reviewed)
+    already = len(records)
+    in_frame = set(fr.files["sha256"])
+    # Files already on disk give the cross-file tell more builds to compare, so they are read too.
+    batch = sorted({p.name for d in dirs for p in d.iterdir() if p.name in in_frame} - set(records))
+    if not a.read_local:
+        batch = []
+    local = threading.local()
+
+    def one(sha: str) -> dict:
+        if a.no_fetch:
+            return _examine(sha, dirs, None, a.max_size_bytes)
+        if not hasattr(local, "client"):
+            local.client = ApiClient(min_interval=0.0)
+        return _examine(sha, dirs, local.client, a.max_size_bytes)
+
+    tried: set[str] = set()
+    statuses: Counter[str] = Counter()
+    rounds = 0
+    needed: list[str] = []
+    with cache.open("a") as fh, ThreadPoolExecutor(max_workers=a.workers) as pool:
+        while True:
+            if not batch:
+                _, _, needed = screened_draw(
+                    fr.files,
+                    _screen(records, reviewed)[0],
+                    cohort_size=a.cohort_size,
+                    seed=settings.random_seed,
+                    min_definite=MIN_ANSWERING_ENGINES,
+                )
+                batch = [h for h in needed if h not in tried]
+                if not batch:
+                    break
+            rounds += 1
+            log.info("bytes", extra={"round": rounds, "to_read": len(batch), "examined": len(records)})
+            for n, rec in enumerate(pool.map(one, batch), 1):
+                tried.add(rec["sha256"])
+                statuses[rec["status"]] += 1
+                fh.write(json.dumps(rec, separators=(",", ":")) + "\n")
+                if rec["status"] in SETTLED:
+                    records[rec["sha256"]] = rec
+                if n % 1000 == 0:
+                    fh.flush()
+                    log.info("bytes", extra={"round": rounds, "done": n, "of": len(batch)})
+            fh.flush()
+            batch = []
+
+    examined, table = _screen(records, reviewed)
+    verdicts = {k: int(v) for k, v in table["verdict"].value_counts().items()}
+    print(
+        "\n".join(
+            [
+                f"forced bytes -- run {a.run_id}: {len(records)} frame files examined"
+                f" ({already} before this run), {rounds} rounds",
+                "read this run: " + (", ".join(f"{k}={v}" for k, v in sorted(statuses.items())) or "nothing"),
+                "verdicts: " + ", ".join(f"{k}={v}" for k, v in sorted(verdicts.items())),
+                f"written {cache}",
+            ]
+        )
+    )
+    if needed:
+        sys.exit(f"{len(needed)} files the draw needs could not be read: see their status in {cache}")
+
+
 # ----------------------------------------------------------------------------- draw
 
 
@@ -247,17 +416,20 @@ def _write_whole(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
-def _check_continues(prev_id: str, fr: Frame, reason: pd.Series, cohort: pd.DataFrame) -> dict:
-    """Check this draw tops up an earlier run of the same slices; exits when it does not.
+def _check_continues(prev_id: str, fr: Frame, examined: dict, cohort: pd.DataFrame) -> dict:
+    """Check this draw tops up an earlier run; exits when it does not.
 
-    The draw is the head of a fixed permutation, so every file the earlier run drew that is
-    still in frame is drawn again in its band; a file that is not means the two draws differ.
+    The draw is the head of a fixed order that reads the earlier run's slices first, so every
+    file that run drew that is still in frame is drawn again in its band; a file that is not
+    means the two draws differ.
     """
     prev, pm = read_snapshot(_out(prev_id, "draw.parquet"))
-    same_slices = sorted(pm["slice_content_sha256"]) == sorted(fr.slice_hashes)
-    if not same_slices or pm["random_seed"] != settings.random_seed:
+    # The earlier run's slices must be read first and in its order here; more may follow them.
+    earlier = [sorted(pm["slice_content_sha256"]), *pm.get("top_up_slice_content_sha256", [])]
+    ours = [sorted(fr.slice_hashes), *fr.top_up_hashes]
+    if ours[: len(earlier)] != earlier or pm["random_seed"] != settings.random_seed:
         sys.exit(f"run {prev_id} was drawn from other slices or under another seed: it cannot be continued")
-    why = dict(zip(fr.files["sha256"], reason, strict=True))
+    why = {sha: examined.get(sha) for sha in fr.files["sha256"]}
     band_now = dict(zip(cohort["sha256"], cohort["stratum"], strict=True))
     dropped: dict[str, int] = {}
     broken = 0
@@ -315,36 +487,22 @@ def _carry_over(prev_id: str, run_id: str, cohort: pd.DataFrame) -> dict:
 
 def cmd_draw(a: argparse.Namespace, log) -> None:
     fr = _frame(a)
-    static_path = _out(a.run_id, "static.parquet")
-    if not static_path.exists():
-        sys.exit(f"{static_path} is missing: run the static phase over these slices first")
-    static, sm = read_snapshot(static_path)
-    if sorted(sm["slice_content_sha256"]) != sorted(fr.slice_hashes):
-        sys.exit("the static table was read for other slices: run the static phase over these")
-    confirmed: list[str] = []
-    confirmed_meta = None
-    if a.confirmed_memory_images:
-        confirmed, digest = read_confirmed(Path(a.confirmed_memory_images))
-        confirmed_meta = {
-            "path": str(a.confirmed_memory_images),
-            "listed": len(confirmed),
-            "content_sha256": digest,
-        }
-    try:
-        reason = frame_reasons(fr.files["sha256"], static, confirmed)
-    except ValueError as e:
-        sys.exit(str(e))
-    # A frame rule like the size cap: applied before the draw, so pi is over what remains.
-    out_of_frame = reason.notna()
-    removed = {r: int((reason == r).sum()) for r in REASONS if (reason == r).any()}
-    band_at_t = assign_stratum(fr.files["n_malicious"], fr.files["n_definite"])
-    removed_by_band = {k: int(v) for k, v in band_at_t[out_of_frame].value_counts().items()}
-    frame = fr.files[~out_of_frame].reset_index(drop=True)
+    records = _read_bytes_cache(_out(a.run_id, "bytes.jsonl"))
+    if not records:
+        sys.exit("no file of this frame has been examined: run the bytes phase first")
+    reviewed = _read_reviewed(a.reviewed)
+    examined, table = _screen(records, reviewed)
     now, pi_base, over_cap = fr.now, fr.pi_base, fr.over_cap
 
-    cohort, reports = stratified_draw(
-        frame, cohort_size=a.cohort_size, seed=settings.random_seed, min_definite=MIN_ANSWERING_ENGINES
+    cohort, reports, needed = screened_draw(
+        fr.files,
+        examined,
+        cohort_size=a.cohort_size,
+        seed=settings.random_seed,
+        min_definite=MIN_ANSWERING_ENGINES,
     )
+    if needed:
+        sys.exit(f"the draw needs {len(needed)} files that have not been examined: run the bytes phase")
     problems = check_draw(cohort, reports)
     for r in reports:
         log.info("stratum", extra=dataclasses.asdict(r))
@@ -364,7 +522,22 @@ def cmd_draw(a: argparse.Namespace, log) -> None:
     )
     cohort = cohort.assign(_o=order).sort_values("_o").drop(columns="_o").reset_index(drop=True)
 
-    continues = _check_continues(a.continues, fr, reason, cohort) if a.continues else None
+    # What the screen found, over the frame files it examined; the table is the per-file record.
+    in_frame = table[table["sha256"].isin(set(fr.files["sha256"]))].reset_index(drop=True)
+    band_at_t = assign_stratum(fr.files["n_malicious"], fr.files["n_definite"])
+    band_of = dict(zip(fr.files["sha256"], band_at_t, strict=True))
+    in_frame["band_at_t"] = in_frame["sha256"].map(band_of)
+    out_rows = in_frame[in_frame["sha256"].map(examined).notna()]
+    verdicts = {k: int(v) for k, v in in_frame["verdict"].value_counts().items()}
+    images = in_frame[in_frame["verdict"] == image_bytes.MEMORY_IMAGE]
+    by_tell = Counter(t for tells in images["tells"] for t in tells.split(","))
+    told = [*image_bytes.TELLS, REVIEWED]
+    reviewed_sha256 = hashlib.sha256(Path(a.reviewed).read_bytes()).hexdigest() if a.reviewed else None
+    out_by_band = {k: int(v) for k, v in out_rows["band_at_t"].value_counts().items()}
+    screen_out = _out(a.run_id, "screen.parquet")
+    in_frame.to_parquet(screen_out, index=False)
+
+    continues = _check_continues(a.continues, fr, examined, cohort) if a.continues else None
     out = fresh(_out(a.run_id, "draw.parquet"), a.overwrite)
     if continues:
         continues |= _carry_over(a.continues, a.run_id, cohort)
@@ -377,6 +550,8 @@ def cmd_draw(a: argparse.Namespace, log) -> None:
         source="public-api",
         slices=[str(p) for p in a.slice],
         slice_content_sha256=fr.slice_hashes,
+        top_up_slices=[str(p) for p in a.top_up_slice],
+        top_up_slice_content_sha256=fr.top_up_hashes,
         window_start=w0,
         window_end=w1,
         pi_base=pi_base,
@@ -385,12 +560,18 @@ def cmd_draw(a: argparse.Namespace, log) -> None:
         max_size_bytes=a.max_size_bytes,
         over_cap_rows=over_cap,
         slice_rows=fr.slice_rows,
-        frame_rows_before_memory_images=int(len(fr.files)),
-        frame_rows=int(len(frame)),
-        memory_images_out_of_frame=removed,
-        memory_images_by_band_at_t=removed_by_band,
-        static_content_sha256=sm["content_sha256"],
-        confirmed_memory_images=confirmed_meta,
+        frame_rows=int(len(fr.files)),
+        examined_rows=int(len(in_frame)),
+        examined_verdicts=verdicts,
+        memory_images_by_tell={t: int(by_tell[t]) for t in told if by_tell[t]},
+        reviewed_rows=len(reviewed),
+        reviewed_content_sha256=reviewed_sha256,
+        rules_version=image_bytes.RULES_VERSION,
+        out_of_frame_by_band_at_t=out_by_band,
+        screen_content_sha256=hashlib.sha256(
+            in_frame.sort_values("sha256").to_csv(index=False).encode()
+        ).hexdigest(),
+        reader_sha256=READER,
         continues=continues,
         cohort_size_requested=a.cohort_size,
         band_edges={"lower": CONTESTED_LOWER, "upper": CONTESTED_UPPER, "consensus": CONSENSUS_MALICIOUS},
@@ -405,16 +586,18 @@ def cmd_draw(a: argparse.Namespace, log) -> None:
         f"forced draw -- run {a.run_id}: {fr.slice_rows} slice rows, {fr.scanned_rows} scanned first,"
         f" {len(fr.files)} aged [{a.min_age_days}, {a.max_age_days}) days and under {a.max_size_bytes} bytes"
         f" ({over_cap} over the cap); pi_base = {pi_base:.6g}",
-        f"memory images out of frame: {int(out_of_frame.sum())} ("
-        + (", ".join(f"{k}={v}" for k, v in removed.items()) or "none")
-        + f"); {len(frame)} files stay",
-        "  by band at T: " + (", ".join(f"{k}={v}" for k, v in removed_by_band.items()) or "none"),
-        f"{'stratum':20s} {'available':>9s} {'target':>7s} {'drawn':>6s} {'pi_draw':>8s}",
+        f"examined from their bytes: {len(in_frame)} frame files: "
+        + ", ".join(f"{k}={v}" for k, v in sorted(verdicts.items())),
+        "  memory images by tell: "
+        + (", ".join(f"{t}={by_tell[t]}" for t in told if by_tell[t]) or "none"),
+        "  out of frame by band at T: " + (", ".join(f"{k}={v}" for k, v in out_by_band.items()) or "none"),
+        f"{'stratum':20s} {'in band':>8s} {'examined':>8s} {'out':>6s} {'target':>7s} {'drawn':>6s}"
+        f" {'pi_draw':>8s}",
     ]
     for r in reports:
         lines.append(
-            f"{r.stratum:20s} {r.n_available:9d} {r.n_target:7d} {r.n_draw:6d} {r.pi:8.4f}"
-            + ("  UNDER-FILLED" if r.underfilled else "")
+            f"{r.stratum:20s} {r.n_band:8d} {r.n_examined:8d} {r.n_out:6d} {r.n_target:7d} {r.n_draw:6d}"
+            f" {r.pi:8.4f}" + ("  UNDER-FILLED" if r.underfilled else "")
         )
     if continues:
         gone = ", ".join(f"{k}={v}" for k, v in continues["dropped"].items()) or "none"
@@ -427,7 +610,7 @@ def cmd_draw(a: argparse.Namespace, log) -> None:
                 f"  carried over {continues['log_records_carried']} rescan records and"
                 f" {continues['renders_carried']} renders"
             )
-    lines.append(f"cohort: {len(cohort)} files in the draw; written {out}")
+    lines.append(f"cohort: {len(cohort)} files in the draw; written {out} and {screen_out}")
     print("\n".join(lines))
 
 
@@ -795,9 +978,22 @@ def main() -> None:
     ap.add_argument("--overwrite", action="store_true")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
-    # The frame's own rules, shared by the two phases that build it.
+    # The frame's own rules, shared by the phases that build it.
     f = argparse.ArgumentParser(add_help=False)
     f.add_argument("--slice", action="append", required=True, help="an API slice parquet; repeat for a union")
+    f.add_argument(
+        "--top-up-slice",
+        action="append",
+        default=[],
+        metavar="PARQUET",
+        help="a further slice of the same window, read only after the slices before it: it tops up"
+        " the bands they could not fill and moves no file they gave. Repeat for more, in order",
+    )
+    f.add_argument(
+        "--reviewed",
+        metavar="TSV",
+        help="files a person found to be memory images where no rule says so: sha256 and note columns",
+    )
     f.add_argument(
         "--min-age-days", type=int, default=settings.horizon_days, help="first scan at least this old"
     )
@@ -812,7 +1008,7 @@ def main() -> None:
     )
 
     t = sub.add_parser(
-        "static", parents=[f], help="read the frame's layout fields and mark the memory images"
+        "static", parents=[f], help="a survey: what the index's layout fields say of the frame"
     )
     t.add_argument("--rate", type=float, default=3.0, help="index queries per second")
     t.add_argument("--batch", type=int, default=50, help="files per index query")
@@ -820,17 +1016,31 @@ def main() -> None:
         "--retry-absent", action="store_true", help="ask again for files the index had no document for"
     )
 
+    b = sub.add_parser("bytes", parents=[f], help="read the bytes of the files the draw needs")
+    b.add_argument("--cohort-size", type=int, default=settings.cohort_size)
+    b.add_argument(
+        "--samples",
+        action="append",
+        required=True,
+        metavar="DIR",
+        help="a directory of sample files named by sha256; repeat for several. A fetched file"
+        " is kept in the first. They are live samples: read-only, never run",
+    )
+    b.add_argument("--workers", type=int, default=4, help="files read or fetched at a time")
+    b.add_argument("--no-fetch", action="store_true", help="read only what the directories hold")
+    b.add_argument(
+        "--read-local",
+        action="store_true",
+        help="also read every frame file the directories hold, whether or not the draw needs it",
+    )
+
     d = sub.add_parser("draw", parents=[f], help="band the slices at T and draw the cohort")
     d.add_argument("--cohort-size", type=int, default=settings.cohort_size)
     d.add_argument(
-        "--confirmed-memory-images",
-        metavar="FILE",
-        help="sha256 per line: files a byte-level check found to be memory images, out of frame too",
-    )
-    d.add_argument(
         "--continues",
         metavar="RUN",
-        help="an earlier run of the same slices that this draw tops up; its log and renders carry over",
+        help="an earlier run that this draw tops up, from the same slices read first; its log and"
+        " renders carry over",
     )
 
     s = sub.add_parser("submit", help="POST the rescans, resumably")
@@ -846,7 +1056,14 @@ def main() -> None:
 
     a = ap.parse_args()
     log = configure()
-    {"static": cmd_static, "draw": cmd_draw, "submit": cmd_submit, "collect": cmd_collect}[a.cmd](a, log)
+    phases = {
+        "static": cmd_static,
+        "bytes": cmd_bytes,
+        "draw": cmd_draw,
+        "submit": cmd_submit,
+        "collect": cmd_collect,
+    }
+    phases[a.cmd](a, log)
 
 
 if __name__ == "__main__":

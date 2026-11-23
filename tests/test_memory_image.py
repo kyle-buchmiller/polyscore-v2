@@ -1,20 +1,14 @@
-"""Guards on the frame rule that keeps memory images out of the draw."""
+"""Guards on the survey of what the index's own fields say about memory images."""
 
 from __future__ import annotations
 
-import pandas as pd
-import pytest
-
 from polyscore_v2.memory_image import (
-    REASON_CONFIRMED,
     REASON_LAYOUT,
     REASON_NO_RECORD,
     REASON_RELOCATED_EXE,
     REASON_RUNTIME_BASE,
     absent,
     classify,
-    frame_reasons,
-    read_confirmed,
     to_frame,
     trim,
 )
@@ -93,29 +87,7 @@ def test_trim_keeps_what_classify_reads():
     assert "md5" not in trim(doc)["artifact"]
 
 
-def test_frame_reasons_adds_the_confirmed_list_under_the_index():
-    hashes = [f"{i:064x}" for i in range(4)]
-    static = to_frame(
-        [
-            classify(_doc(ON_DISK, size=0x2800, sha=hashes[0])),
-            classify(_doc(DUMPED, size=0x4000, sha=hashes[1])),
-            classify(_doc(ON_DISK, size=0x2800, sha=hashes[2])),
-            absent(hashes[3]),
-        ]
-    )
+def test_the_table_keeps_the_image_base_an_integer_and_names_a_file_the_index_lacks():
+    static = to_frame([classify(_doc(ON_DISK, size=0x2800)), absent("d" * 64)])
     assert str(static["image_base"].dtype) == "Int64"
-    reason = frame_reasons(pd.Series(hashes), static, confirmed=[hashes[1], hashes[2]])
-    assert list(reason) == [None, REASON_LAYOUT, REASON_CONFIRMED, REASON_NO_RECORD]
-
-
-def test_frame_reasons_refuses_a_frame_the_table_does_not_cover():
-    static = to_frame([classify(_doc(ON_DISK, size=0x2800, sha="c" * 64))])
-    with pytest.raises(ValueError, match="no static record"):
-        frame_reasons(pd.Series(["c" * 64, "d" * 64]), static)
-
-
-def test_read_confirmed_ignores_comments_and_hashes_the_list(tmp_path):
-    p = tmp_path / "confirmed.txt"
-    p.write_text("# from a byte-level check\n" + "E" * 64 + "  # sample 18\n\n" + "f" * 64 + "\n")
-    hashes, digest = read_confirmed(p)
-    assert hashes == ["e" * 64, "f" * 64] and len(digest) == 64
+    assert list(static["reason"]) == [None, REASON_NO_RECORD]
